@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GridLock: The Great British Upgrade</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html, body { background: #0f172a; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #1e293b; }
+  ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+
+  @keyframes linePulse {
+    0%, 100% { stroke: #ef4444; stroke-opacity: 1; }
+    50%      { stroke: #f97316; stroke-opacity: 0.45; }
+  }
+  .pulse-danger { animation: linePulse 0.85s ease-in-out infinite; }
+
+  @keyframes nodeGlow {
+    0%, 100% { filter: drop-shadow(0 0 3px rgba(74,222,128,0.8)); }
+    50%      { filter: drop-shadow(0 0 9px rgba(74,222,128,0.9)); }
+  }
+  .node-glow { animation: nodeGlow 2.4s ease-in-out infinite; }
+
+  @keyframes blinkBadge { 0%,100% {opacity:1;} 50% {opacity:0.35;} }
+  .blink { animation: blinkBadge 1s steps(1) infinite; }
+
+  @keyframes slideUp { from { transform: translateY(14px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .slide-up { animation: slideUp 0.25s ease-out; }
+
+  .font-term { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="env,react">
+const { useState, useMemo, useEffect, useRef } = React;
+
+/* =========================================================================
+   GRIDLOCK: THE GREAT BRITISH UPGRADE
+   A single-file NESO grid strategy simulation.
+   ========================================================================= */
+
+/* ----------------------------- utilities ------------------------------ */
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const r1 = v => Math.round(v * 10) / 10;
+const fmtGW = v => `${r1(v)} GW`;
+const fmtM = v => `£${Math.round(v).toLocaleString("en-GB")}m`;
+const fmtP = v => `${r1(v)}p`;
+
+/* ----------------------------- static data ---------------------------- */
+const NODE_DEFS = {
+  A: {
+    id: "A", name: "Scotland & North Sea", short: "SCOTLAND",
+    blurb: "Ferocious wind resource, sparse local demand. Everything it makes must travel south.",
+    demandShare: 0.09, x: 158, y: 110,
+    yields: { wind: 1.3, solar: 0.6, nuclear: 1.0, battery: 1.0 },
+    offshoreOk: true, nimbyFactor: 1.0,
+  },
+  B: {
+    id: "B", name: "The Industrial Midlands", short: "MIDLANDS",
+    blurb: "Heavy manufacturing base-load. The crossroads of the national grid.",
+    demandShare: 0.28, x: 165, y: 300,
+    yields: { wind: 0.9, solar: 0.9, nuclear: 1.0, battery: 1.0 },
+    offshoreOk: false, nimbyFactor: 1.0,
+  },
+  C: {
+    id: "C", name: "East Anglian Coast", short: "EAST ANGLIA",
+    blurb: "Prime offshore wind landing hub and the nuclear coast. Cable-landing country.",
+    demandShare: 0.11, x: 232, y: 392,
+    yields: { wind: 1.15, solar: 1.0, nuclear: 1.15, battery: 1.0 },
+    offshoreOk: true, nimbyFactor: 1.1,
+  },
+  D: {
+    id: "D", name: "London & South East", short: "LONDON & SE",
+    blurb: "The demand monster. Half the country's load, almost none of its acreage.",
+    demandShare: 0.52, x: 192, y: 452, labelBelow: true, labelDX: -28,
+    yields: { wind: 0.6, solar: 1.1, nuclear: 0.9, battery: 1.0 },
+    offshoreOk: false, nimbyFactor: 1.5,
+  },
+};
+
+const LINK_DEFS = {
+  L1: { id: "L1", name: "Scotland → Midlands", from: "A", to: "B", baseCap: 4, subsea: true },
+  L2: { id: "L2", name: "East Anglia → London", from: "C", to: "D", baseCap: 6, subsea: true },
+  L3: { id: "L3", name: "Midlands → London", from: "B", to: "D", baseCap: 8, subsea: false },
+};
+
+const ASSET_TYPES = {
+  onshore:  { id: "onshore",  name: "Onshore Wind",  icon: "🌀", cost: 240, gw: 2.0, kind: "wind",    nimby: 14, desc: "Cheap, fast, hated by the shires." },
+  offshore: { id: "offshore", name: "Offshore Wind", icon: "🌊", cost: 550, gw: 3.0, kind: "wind",    nimby: 5,  desc: "Big turbines, big cables. Coastal nodes only." },
+  solar:    { id: "solar",    name: "Solar Farm",    icon: "☀️", cost: 140, gw: 1.2, kind: "solar",   nimby: 8,  desc: "Cheap daytime power. Weak in Scotland." },
+  smr:      { id: "smr",      name: "SMR Nuclear",   icon: "⚛️", cost: 850, gw: 1.8, kind: "nuclear", nimby: 10, desc: "Firm, always-on baseload. Expensive, but it never stops." },
+  battery:  { id: "battery",  name: "Battery Hub",   icon: "🔋", cost: 320, gw: 2.0, kind: "battery", nimby: 3,  desc: "Soaks curtailed wind, firms the grid, calms intermittency." },
+};
+
+const LINK_UPGRADES = {
+  pylon: { id: "pylon", name: "Overhead Pylons", icon: "🗼", cost: 320, addGW: 3, delay: 1, rebellion: 6,
+           desc: "+3 GW in 1 year. Cheap steel. Enrages everyone who can see it (+6% Rebellion, NIMBY at both ends)." },
+  hvdc:  { id: "hvdc", name: "HVDC Cable (Subsea / Underground)", icon: "🧵", cost: 900, addGW: 4, delay: 2, rebellion: 0,
+           desc: "+4 GW in 2 years. Invisible, premium-priced, politically painless." },
+};
+
+/* economy constants — shown to the player in the Mechanics drawer */
+const ECON = {
+  startTreasury: 3000, startPC: 60, startRebellion: 15,
+  baseIncome: 600,                 // £m DESNZ allocation per year
+  gasFleetStart: 34,               // GW of legacy CCGT available as backup
+  gasFuelCostPerGW: 9,             // £m per GW-year fired
+  curtailFinePerGW: 40,            // £m constraint penalty per curtailed GW
+  priceBase: 3.5, pricePerGasGW: 0.19, pricePerCurtailGW: 0.12, levyPriceAdd: 1.2,
+  batteryFirmFactor: 0.5,          // each battery GW provides 0.5 GW of firm cover
+  firmCushionMult: 2.5,            // intermittency: each firm GW steadies 2.5 GW of variable
+  queueDelayDefault: 4, queueDelayReformed: 1,
+  brownoutTolerance: 1.5,          // unserved GW beyond this = national blackout
+  demandStart: 35, demandEnd: 65, totalYears: 12,
+  pcRegen: 5, nimbyDecay: 6,
+};
+
+const demandForYear = (year, extra) =>
+  clamp(ECON.demandStart + (ECON.demandEnd - ECON.demandStart) * (year - 1) / (ECON.totalYears - 1), 0, 999) + (extra || 0);
+
+/* --------------------------- crisis card deck -------------------------- */
+/* Each card: { id, title, body(state), choices:[{label, detail, can(state), effect key }] }
+   Effects are applied in applyCrisisChoice() before the year resolves.   */
+const CRISIS_DECK = [
+  {
+    id: "pylonRevolt", title: "The Shires Pylon Revolt",
+    body: () => "Forty backbenchers, three peers and one furious celebrity gardener demand you underground the East Anglian pylon route. The Daily Mail has a helicopter over the marshes.",
+    choices: [
+      { label: "Yield — underground the route", detail: "−£400m, every queued link upgrade delayed +1 yr, +6 Approval", fx: "pylonYield", can: s => s.treasury >= 400 },
+      { label: "Force the overhead lines through", detail: "Free. +25% Rebellion Risk, −4 Approval", fx: "pylonForce" },
+    ],
+  },
+  {
+    id: "dunkelflaute", title: "The Dunkelflaute",
+    body: (s) => `A three-week anticyclonic gloom settles over the North Sea. Wind output will collapse to ~5% this year. Your firm cover (nuclear + batteries + imports + gas fleet) is ${r1(firmCoverGW(s))} GW against ~${r1(demandForYear(s.year, s.demandExtra))} GW of demand.`,
+    choices: [
+      { label: "Buy emergency foreign gas (LNG)", detail: "−£500m, +8 GW temporary fleet — the lights stay on", fx: "lng", can: s => s.treasury >= 500 },
+      { label: "Trust the system, ride it out", detail: "Free. If firm cover falls short… brownouts, or worse", fx: "rideOut" },
+    ],
+  },
+  {
+    id: "dataCentre", title: "Hyperscale Gold Rush",
+    body: () => "A US tech giant wants planning consent for a 2 GW data-centre campus on the M4 corridor. The Treasury is salivating; your demand forecasters are weeping.",
+    choices: [
+      { label: "Approve the campus", detail: "+£250m, +5 PC, London demand +2 GW permanently", fx: "dcApprove" },
+      { label: "Block on grid-capacity grounds", detail: "−8 PC, −3 Approval. The Chancellor remembers.", fx: "dcBlock" },
+    ],
+  },
+  {
+    id: "interconnector", title: "The Viking Interconnector",
+    body: () => "Statnett offers a stake in a new Norwegian interconnector: 2 GW of firm hydro import landing in Scotland, ready immediately.",
+    choices: [
+      { label: "Sign the deal", detail: "−£650m, +2 GW permanent firm imports", fx: "viking", can: s => s.treasury >= 650 },
+      { label: "Politely decline", detail: "No effect", fx: "none" },
+    ],
+  },
+  {
+    id: "gasShock", title: "Wholesale Gas Shock",
+    body: () => "A cold snap in Asia and an outage in the Gulf send global gas prices vertical. Wholesale electricity will spike +2.5p this year however much you wince.",
+    choices: [
+      { label: "Subsidise household bills", detail: "−£400m, +7 Approval (price still spikes)", fx: "gasSubsidise", can: s => s.treasury >= 400 },
+      { label: "Hold firm — markets are markets", detail: "Free. +14% Rebellion, −6 Approval", fx: "gasHold" },
+    ],
+  },
+  {
+    id: "judicialReview", title: "Planning Judicial Review",
+    body: () => "A well-funded residents' alliance lodges a judicial review against your entire connections pipeline, citing a newt survey from 2009.",
+    choices: [
+      { label: "Settle out of court", detail: "−£220m, case closed", fx: "jrSettle", can: s => s.treasury >= 220 },
+      { label: "Fight it (50/50 odds)", detail: "Win: +8 PC. Lose: every queued asset +1 yr, −5 Approval", fx: "jrFight" },
+    ],
+  },
+  {
+    id: "smrHype", title: "Small Modular Hype Cycle",
+    body: () => "Rolls-Royce offers to co-fund a flagship SMR in the Midlands if NESO matches the investment this year. The unions are thrilled. The spreadsheet is nervous.",
+    choices: [
+      { label: "Match-fund the SMR", detail: "−£420m, 1.8 GW SMR enters the Midlands queue", fx: "smrFund", can: s => s.treasury >= 420 },
+      { label: "Decline politely", detail: "No effect", fx: "none" },
+    ],
+  },
+  {
+    id: "stormBryn", title: "Storm Bryn",
+    body: () => "A once-in-a-decade storm shreds conductor lines across the Pennines. Engineering wants money; the Treasury wants you to 'sweat the assets'.",
+    choices: [
+      { label: "Emergency hardening programme", detail: "−£180m, grid fully restored", fx: "stormFix", can: s => s.treasury >= 180 },
+      { label: "Defer maintenance", detail: "Free. A random link loses 1 GW permanently, +6% Rebellion", fx: "stormDefer" },
+    ],
+  },
+  {
+    id: "copPledge", title: "The COP Pledge",
+    body: () => "The PM is at COP and wants a headline. No.10 asks whether Britain should pledge a 2035 clean-power sprint, live on stage, before checking with you.",
+    choices: [
+      { label: "Back the pledge", detail: "+10 PC, +8% Rebellion (the backbenches seethe)", fx: "copBack" },
+      { label: "Brief against it quietly", detail: "−6 PC. No.10 remembers.", fx: "copQuiet" },
+    ],
+  },
+  {
+    id: "teaOffensive", title: "Backbench Tea Offensive",
+    body: () => "The 1922 Committee invites you for tea and 'a frank exchange of views' about pylons, bills, and your continued employment.",
+    choices: [
+      { label: "Full charm offensive", detail: "−15 PC, −18% Rebellion Risk", fx: "teaCharm", can: s => s.pc >= 15 },
+      { label: "Send a deputy with biscuits", detail: "No effect", fx: "none" },
+    ],
+  },
+  {
+    id: "gigafactory", title: "Battery Gigafactory Bid",
+    body: () => "A consortium will build a UK battery gigafactory — if NESO anchors the order book. Domestic cells would slash storage costs forever.",
+    choices: [
+      { label: "Anchor the order book", detail: "−£300m, all future Battery Hubs −25% cost, +4 Approval", fx: "gigaFund", can: s => s.treasury >= 300 },
+      { label: "Let the market decide", detail: "No effect", fx: "none" },
+    ],
+  },
+  {
+    id: "evMandate", title: "EV Mandate Acceleration",
+    body: () => "Transport wants to pull the petrol-car ban forward three years. Great for Net Zero optics; another 1.5 GW on your evening peak, everywhere, forever.",
+    choices: [
+      { label: "Back the mandate", detail: "+8 PC, +4 Approval, national demand +1.5 GW permanently", fx: "evBack" },
+      { label: "Ask for a delay", detail: "−6 PC, −4 Approval (the green lobby is incandescent)", fx: "evDelay" },
+    ],
+  },
+];
+
+const shuffle = arr => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+/* --------------------------- initial state ----------------------------- */
+function makeAsset(type, nodeId, effGW) {
+  const t = ASSET_TYPES[type];
+  return { uid: Math.random().toString(36).slice(2, 9), type, nodeId, gw: effGW, kind: t.kind, name: t.name, icon: t.icon };
+}
+
+function initialState() {
+  return {
+    year: 1, phase: "intro",            // intro | play | crisis | report | dead
+    treasury: ECON.startTreasury,
+    pc: ECON.startPC,
+    rebellion: ECON.startRebellion,
+    approval: 52,
+    price: 8.5,
+    netZero: 25,
+    intermittency: 16,
+    gasFleet: ECON.gasFleetStart,
+    firmImports: 0,
+    demandExtra: 0, demandExtraD: 0,
+    batteryDiscount: 1,
+    policies: { queueReform: false, carbonLevy: false },
+    whipsUsed: false,
+    nimby: { A: 22, B: 18, C: 30, D: 45 },
+    assets: [
+      makeAsset("onshore",  "A", 5.0),
+      makeAsset("onshore",  "B", 1.0),
+      makeAsset("offshore", "C", 2.0),
+      makeAsset("smr",      "C", 1.2),
+      makeAsset("solar",    "D", 0.5),
+    ],
+    queue: [ // legacy pipeline already in flight — the connections queue in miniature
+      { uid: "q1", type: "offshore", nodeId: "C", gw: 3.0, turnsLeft: 1, label: "Offshore Wind 3.0 GW" },
+      { uid: "q2", type: "onshore",  nodeId: "A", gw: 2.6, turnsLeft: 2, label: "Onshore Wind 2.6 GW" },
+      { uid: "q3", type: "battery",  nodeId: "B", gw: 2.0, turnsLeft: 3, label: "Battery Hub 2.0 GW" },
+    ],
+    links: { L1: { cap: 4 }, L2: { cap: 6 }, L3: { cap: 8 } },
+    linkQueue: [],                      // { uid, linkId, addGW, turnsLeft, label }
+    deck: shuffle(CRISIS_DECK),
+    activeCrisis: null,                 // card object while choosing
+    crisisMods: null,                   // resolved-choice modifiers applied to this year's physics
+    log: [
+      { year: 0, tone: "info", text: "SYSTEM ONLINE. Welcome, Chair. The Connections Queue stands at 4 years. The South is hungry. The wind is in the wrong place." },
+      { year: 0, tone: "warn", text: "FORECAST: national demand will climb from 35 GW to 65 GW by Year 12 (EVs, heat pumps, data centres)." },
+    ],
+    gameOver: null,                     // { type: 'bankrupt'|'coup'|'blackout', detail }
+    stats: { fines: 0, curtailed: 0, gasBurned: 0, built: 0, pylons: 0, hvdc: 0, underground: 0, brownouts: 0, peakPrice: 8.5, batteriesGW: 0, lowestTreasury: ECON.startTreasury },
+    lastYear: null,                     // last resolution snapshot for the dashboard
+  };
+}
+
+/* ------------------------ physics / flow engine ------------------------ */
+function nodeGen(state, nodeId, windCF, solarCF) {
+  let wind = 0, solar = 0, nuclear = 0, battery = 0;
+  for (const a of state.assets) {
+    if (a.nodeId !== nodeId) continue;
+    if (a.kind === "wind") wind += a.gw;
+    else if (a.kind === "solar") solar += a.gw;
+    else if (a.kind === "nuclear") nuclear += a.gw;
+    else if (a.kind === "battery") battery += a.gw;
+  }
+  return { windCap: wind, solarCap: solar, nuclear, battery, gen: wind * windCF + solar * solarCF + nuclear };
+}
+
+function totalsByKind(state) {
+  const t = { wind: 0, solar: 0, nuclear: 0, battery: 0 };
+  for (const a of state.assets) t[a.kind] += a.gw;
+  return t;
+}
+
+function firmCoverGW(state) {
+  const t = totalsByKind(state);
+  return t.nuclear + t.battery * ECON.batteryFirmFactor + state.firmImports + state.gasFleet;
+}
+
+/* computeFlows: the heart of the spatial model.
+   Scotland exports over L1 (battery absorbs spill, rest is curtailed).
+   East Anglia exports over L2. Midlands re-exports over L3.            */
+function computeFlows(state, windCF, solarCF) {
+  const demand = demandForYear(state.year, state.demandExtra);
+  const dem = {};
+  for (const id of ["A", "B", "C", "D"]) dem[id] = demand * NODE_DEFS[id].demandShare;
+  dem.D += state.demandExtraD;
+
+  const g = {};
+  for (const id of ["A", "B", "C", "D"]) g[id] = nodeGen(state, id, windCF, solarCF);
+
+  // Scotland → Midlands
+  const surplusA = Math.max(0, g.A.gen - dem.A);
+  const flow1 = Math.min(surplusA, state.links.L1.cap);
+  const spillA = surplusA - flow1;
+  const absorbA = Math.min(spillA, g.A.battery * ECON.batteryFirmFactor);
+  const curtailA = spillA - absorbA;
+
+  // East Anglia → London
+  const surplusC = Math.max(0, g.C.gen - dem.C);
+  const flow2 = Math.min(surplusC, state.links.L2.cap);
+  const spillC = surplusC - flow2;
+  const absorbC = Math.min(spillC, g.C.battery * ECON.batteryFirmFactor);
+  const curtailC = spillC - absorbC;
+
+  // Midlands → London (local gen + Scottish imports)
+  const availB = g.B.gen + flow1;
+  const surplusB = Math.max(0, availB - dem.B);
+  const flow3 = Math.min(surplusB, state.links.L3.cap);
+  const spillB = surplusB - flow3;
+  const absorbB = Math.min(spillB, g.B.battery * ECON.batteryFirmFactor);
+  const curtailB = spillB - absorbB;
+
+  const curtailed = curtailA + curtailB + curtailC;
+  const cleanGen = g.A.gen + g.B.gen + g.C.gen + g.D.gen;
+  const cleanDelivered = Math.max(0, cleanGen - curtailed);
+  const t = totalsByKind(state);
+  const batteryFirm = t.battery * ECON.batteryFirmFactor;
+  const gasNeeded = Math.max(0, demand - cleanDelivered - batteryFirm - state.firmImports);
+
+  return {
+    demand, dem, g, flow1, flow2, flow3,
+    curtailA, curtailB, curtailC, curtailed,
+    cleanGen, cleanDelivered, batteryFirm, gasNeeded,
+    totals: t,
+  };
+}
+
+function intermittencyRisk(state, flowsDemand) {
+  const t = totalsByKind(state);
+  const variable = t.wind + t.solar;
+  const firm = (t.nuclear + t.battery + state.firmImports) * ECON.firmCushionMult;
+  return clamp(((variable - firm) / Math.max(flowsDemand, 1)) * 100, 0, 99);
+}
+
+/* ------------------------- crisis choice effects ------------------------ */
+function applyCrisisChoice(state, fx) {
+  const s = { ...state, nimby: { ...state.nimby }, stats: { ...state.stats }, policies: { ...state.policies }, links: { L1: { ...state.links.L1 }, L2: { ...state.links.L2 }, L3: { ...state.links.L3 } } };
+  s.queue = state.queue.map(q => ({ ...q }));
+  s.linkQueue = state.linkQueue.map(q => ({ ...q }));
+  const mods = { windOverride: null, priceShock: 0, tempFleet: 0 };
+  const logs = [];
+  const L = (tone, text) => logs.push({ year: s.year, tone, text });
+
+  switch (fx) {
+    case "none": L("info", "MINISTERIAL BOX: no action taken. The red box closes with a satisfying thunk."); break;
+    case "pylonYield":
+      s.treasury -= 400; s.approval = clamp(s.approval + 6, 0, 100); s.stats.underground++;
+      s.linkQueue.forEach(q => q.turnsLeft += 1);
+      L("warn", "PYLON REVOLT: route undergrounded. −£400m, link upgrades slip a year. The gardener sends flowers.");
+      break;
+    case "pylonForce":
+      s.rebellion = clamp(s.rebellion + 25, 0, 100); s.approval = clamp(s.approval - 4, 0, 100); s.stats.pylons++;
+      L("bad", "PYLON REVOLT: overhead lines forced through. Rebellion Risk +25%. Effigies reported in three constituencies.");
+      break;
+    case "lng":
+      s.treasury -= 500; mods.windOverride = 0.05; mods.tempFleet = 8;
+      L("warn", "DUNKELFLAUTE: £500m of emergency LNG chartered. The lights stay on; the Treasury does not smile.");
+      break;
+    case "rideOut":
+      mods.windOverride = 0.05;
+      L("bad", "DUNKELFLAUTE: no bailout purchased. Wind output collapses to 5%. Praying to the firm-capacity gods.");
+      break;
+    case "dcApprove":
+      s.treasury += 250; s.pc = clamp(s.pc + 5, 0, 100); s.demandExtraD += 2;
+      L("warn", "DATA CENTRE: campus approved. +£250m, +5 PC. London demand permanently +2 GW. The forecasters update their CVs.");
+      break;
+    case "dcBlock":
+      s.pc = clamp(s.pc - 8, 0, 100); s.approval = clamp(s.approval - 3, 0, 100);
+      L("info", "DATA CENTRE: blocked on capacity grounds. The Chancellor's thank-you note is notably absent.");
+      break;
+    case "viking":
+      s.treasury -= 650; s.firmImports += 2;
+      L("good", "INTERCONNECTOR: Viking link signed. +2 GW of firm Norwegian hydro now backs the system.");
+      break;
+    case "gasSubsidise":
+      s.treasury -= 400; s.approval = clamp(s.approval + 7, 0, 100); mods.priceShock = 2.5;
+      L("warn", "GAS SHOCK: bills subsidised (−£400m). Wholesale still spikes +2.5p but the public notices the cushion.");
+      break;
+    case "gasHold":
+      s.rebellion = clamp(s.rebellion + 14, 0, 100); s.approval = clamp(s.approval - 6, 0, 100); mods.priceShock = 2.5;
+      L("bad", "GAS SHOCK: no subsidy. Bills bite, +2.5p, Rebellion +14%. 'OUT OF TOUCH' — every front page.");
+      break;
+    case "jrSettle":
+      s.treasury -= 220;
+      L("info", "JUDICIAL REVIEW: settled for £220m. The newts remain undisturbed and unconsulted.");
+      break;
+    case "jrFight": {
+      if (Math.random() < 0.5) {
+        s.pc = clamp(s.pc + 8, 0, 100);
+        L("good", "JUDICIAL REVIEW: WON in the High Court. +8 PC. The newt survey is ruled inadmissible.");
+      } else {
+        s.queue.forEach(q => q.turnsLeft += 1);
+        s.approval = clamp(s.approval - 5, 0, 100);
+        L("bad", "JUDICIAL REVIEW: LOST. Every queued asset slips a year. The newts celebrate.");
+      }
+      break;
+    }
+    case "smrFund": {
+      s.treasury -= 420;
+      const delay = s.policies.queueReform ? ECON.queueDelayReformed : ECON.queueDelayDefault;
+      s.queue.push({ uid: Math.random().toString(36).slice(2, 9), type: "smr", nodeId: "B", gw: 1.8, turnsLeft: delay, label: "SMR Nuclear 1.8 GW (co-funded)" });
+      L("good", `SMR DEAL: 1.8 GW co-funded reactor enters the Midlands queue (${delay} yr to connect).`);
+      break;
+    }
+    case "stormFix":
+      s.treasury -= 180;
+      L("info", "STORM BRYN: £180m hardening programme. Lines re-strung, engineers exhausted, grid intact.");
+      break;
+    case "stormDefer": {
+      const ids = ["L1", "L2", "L3"];
+      const hit = ids[Math.floor(Math.random() * 3)];
+      s.links[hit].cap = Math.max(1, s.links[hit].cap - 1);
+      s.rebellion = clamp(s.rebellion + 6, 0, 100);
+      L("bad", `STORM BRYN: maintenance deferred. ${LINK_DEFS[hit].name} permanently loses 1 GW. Rebellion +6%.`);
+      break;
+    }
+    case "copBack":
+      s.pc = clamp(s.pc + 10, 0, 100); s.rebellion = clamp(s.rebellion + 8, 0, 100);
+      L("warn", "COP: pledge backed. +10 PC from No.10; +8% Rebellion from everyone behind you.");
+      break;
+    case "copQuiet":
+      s.pc = clamp(s.pc - 6, 0, 100);
+      L("info", "COP: pledge quietly smothered. −6 PC. No.10's texts become noticeably terser.");
+      break;
+    case "teaCharm":
+      s.pc = clamp(s.pc - 15, 0, 100); s.rebellion = clamp(s.rebellion - 18, 0, 100);
+      L("good", "1922 COMMITTEE: tea, flattery, and selective honesty. Rebellion Risk −18%.");
+      break;
+    case "gigaFund":
+      s.treasury -= 300; s.batteryDiscount = 0.75; s.approval = clamp(s.approval + 4, 0, 100);
+      L("good", "GIGAFACTORY: order book anchored. All future Battery Hubs cost −25%. 'BRITISH BATTERIES BOOM'.");
+      break;
+    case "evBack":
+      s.pc = clamp(s.pc + 8, 0, 100); s.approval = clamp(s.approval + 4, 0, 100); s.demandExtra += 1.5;
+      L("warn", "EV MANDATE: accelerated. +8 PC, +4 Approval. National demand permanently +1.5 GW.");
+      break;
+    case "evDelay":
+      s.pc = clamp(s.pc - 6, 0, 100); s.approval = clamp(s.approval - 4, 0, 100);
+      L("info", "EV MANDATE: delayed. The green lobby projects your face onto Battersea Power Station. Unflatteringly.");
+      break;
+    default: break;
+  }
+  s.log = [...state.log, ...logs];
+  return { state: s, mods };
+}
+
+/* --------------------------- year resolution --------------------------- */
+function resolveYear(prev, mods) {
+  const s = {
+    ...prev,
+    nimby: { ...prev.nimby }, stats: { ...prev.stats },
+    links: { L1: { ...prev.links.L1 }, L2: { ...prev.links.L2 }, L3: { ...prev.links.L3 } },
+    assets: prev.assets.slice(), queue: [], linkQueue: [],
+  };
+  const logs = [];
+  const L = (tone, text) => logs.push({ year: prev.year, tone, text });
+
+  /* 1 — connections queue ticks down */
+  for (const q of prev.queue) {
+    const left = q.turnsLeft - 1;
+    if (left <= 0) {
+      s.assets.push(makeAsset(q.type, q.nodeId, q.gw));
+      if (q.type === "battery") s.stats.batteriesGW += q.gw;
+      L("good", `ENERGISED: ${q.label} connects at ${NODE_DEFS[q.nodeId].short}. First power flows.`);
+    } else s.queue.push({ ...q, turnsLeft: left });
+  }
+  for (const q of prev.linkQueue) {
+    const left = q.turnsLeft - 1;
+    if (left <= 0) {
+      s.links[q.linkId].cap += q.addGW;
+      L("good", `COMMISSIONED: ${q.label} — ${LINK_DEFS[q.linkId].name} now ${s.links[q.linkId].cap} GW.`);
+    } else s.linkQueue.push({ ...q, turnsLeft: left });
+  }
+
+  /* 2 — weather draw */
+  const windCF = mods.windOverride != null ? mods.windOverride : 0.75 + Math.random() * 0.3;
+  const solarCF = 0.8 + Math.random() * 0.2;
+
+  /* 3 — physics */
+  const tempFleetState = { ...s, gasFleet: s.gasFleet + (mods.tempFleet || 0) };
+  const f = computeFlows(tempFleetState, windCF, solarCF);
+  const fleetAvail = s.gasFleet + (mods.tempFleet || 0);
+  const gasFired = Math.min(f.gasNeeded, fleetAvail);
+  const unserved = f.gasNeeded - gasFired;
+
+  /* 4 — money */
+  let income = ECON.baseIncome + (s.policies.carbonLevy ? 300 : 0);
+  const gasCost = gasFired * ECON.gasFuelCostPerGW;
+  const fine = f.curtailed * ECON.curtailFinePerGW;
+  s.treasury = s.treasury + income - gasCost - fine;
+  s.stats.fines += fine; s.stats.curtailed += f.curtailed; s.stats.gasBurned += gasFired;
+
+  if (f.curtailed > 0.05) {
+    L("bad", `CURTAILMENT: ${fmtGW(f.curtailed)} of clean power dumped at saturated boundaries. Constraint penalty ${fmtM(fine)}. Gas peakers spin up in the South to cover the gap.`);
+  }
+
+  /* 5 — price */
+  s.price = r1(ECON.priceBase + gasFired * ECON.pricePerGasGW + f.curtailed * ECON.pricePerCurtailGW
+            + (s.policies.carbonLevy ? ECON.levyPriceAdd : 0) + (mods.priceShock || 0));
+  s.stats.peakPrice = Math.max(s.stats.peakPrice, s.price);
+
+  /* 6 — net zero + intermittency */
+  s.netZero = r1(clamp((1 - gasFired / f.demand) * 100, 0, 100));
+  s.intermittency = r1(intermittencyRisk(s, f.demand));
+
+  /* 7 — public mood */
+  let dApproval = 0, dRebellion = 0;
+  if (s.price > 18) { dApproval -= 8; dRebellion += 12; L("bad", `BILLS CRISIS: wholesale at ${fmtP(s.price)}. Marginal gas is setting the price of everything. The public is furious.`); }
+  else if (s.price > 14) { dApproval -= 4; dRebellion += 6; L("warn", `PRICE PRESSURE: wholesale at ${fmtP(s.price)} — gas on the margin keeps bills high.`); }
+  else if (s.price < 10) { dApproval += 3; }
+  if (s.intermittency > 40) { dApproval -= 6; dRebellion += 8; L("bad", `GRID INSTABILITY: intermittency risk at ${s.intermittency}%. Frequency excursions reported. Build firm capacity (nuclear / batteries).`); }
+  if (s.approval + dApproval < 30) dRebellion += 6;
+
+  /* NIMBY simmer */
+  for (const id of ["A", "B", "C", "D"]) {
+    if (s.nimby[id] > 70) { dRebellion += 4; L("warn", `NIMBY FLASHPOINT: opposition in ${NODE_DEFS[id].short} at ${Math.round(s.nimby[id])}%. Local MPs are tabling motions.`); }
+    s.nimby[id] = clamp(s.nimby[id] - ECON.nimbyDecay, 0, 100);
+  }
+  if (dRebellion === 0 && f.curtailed < 0.05 && unserved <= 0) {
+    dRebellion = -3; L("good", "QUIET YEAR ON THE BENCHES: competence breeds calm. Rebellion Risk −3%.");
+  }
+  s.approval = clamp(s.approval + dApproval, 0, 100);
+  s.rebellion = clamp(s.rebellion + dRebellion, 0, 100);
+  s.pc = clamp(s.pc + ECON.pcRegen, 0, 100);
+
+  /* 8 — supply security outcomes */
+  if (unserved > ECON.brownoutTolerance) {
+    s.gameOver = { type: "blackout", detail: `Unserved demand hit ${fmtGW(unserved)}. The grid frequency collapsed at 17:42 on a Tuesday in January.` };
+  } else if (unserved > 0) {
+    s.treasury -= 250; s.rebellion = clamp(s.rebellion + 12, 0, 100); s.approval = clamp(s.approval - 10, 0, 100); s.stats.brownouts++;
+    L("bad", `ROLLING BROWNOUTS: ${fmtGW(unserved)} short. Emergency demand control invoked. −£250m, Rebellion +12%, Approval −10.`);
+  }
+
+  /* 9 — carbon levy retires gas fleet */
+  if (s.policies.carbonLevy) {
+    s.gasFleet = Math.max(6, r1(s.gasFleet - 1.5));
+    L("info", `CARBON LEVY: 1.5 GW of CCGT retires early. Backup fleet now ${fmtGW(s.gasFleet)}.`);
+  }
+
+  s.stats.lowestTreasury = Math.min(s.stats.lowestTreasury, s.treasury);
+
+  /* 10 — hard fails */
+  if (!s.gameOver && s.treasury < 0) s.gameOver = { type: "bankrupt", detail: `The Treasury balance hit ${fmtM(s.treasury)}. The IMF answers on the second ring.` };
+  if (!s.gameOver && s.rebellion >= 100) s.gameOver = { type: "coup", detail: "Letters reached the threshold. A leadership challenge was declared during your conference speech." };
+
+  /* 11 — year-end summary */
+  L("info", `FY${prev.year} CLOSE — Demand ${fmtGW(f.demand)} | Clean delivered ${fmtGW(f.cleanDelivered + f.batteryFirm + s.firmImports)} | Gas fired ${fmtGW(gasFired)} | Wind capacity factor ${Math.round(windCF * 100)}% | Net Zero ${s.netZero}%.`);
+
+  s.lastYear = { year: prev.year, windCF, solarCF, gasFired, unserved, flows: f, income, gasCost, fine };
+  s.log = [...prev.log, ...logs];
+  s.whipsUsed = false;
+  s.activeCrisis = null;
+  s.crisisMods = null;
+
+  if (s.gameOver) { s.phase = "dead"; return s; }
+  if (prev.year >= ECON.totalYears) { s.phase = "report"; return s; }
+  s.year = prev.year + 1;
+  s.phase = "play";
+  return s;
+}
+
+/* ------------------------------ scoring -------------------------------- */
+function finalReport(s) {
+  const score = Math.round(
+    s.netZero * 2 + s.treasury / 40 + (100 - s.rebellion) / 2 + s.approval / 2
+    - s.stats.brownouts * 10 - s.stats.fines / 50
+  );
+  let title, line;
+  if (s.netZero >= 90 && s.rebellion < 45) { title = "The Green Architect"; line = "Clean power, calm benches, cables in the right places. Statues will be argued about."; }
+  else if (s.netZero >= 85 && (s.stats.pylons >= 2 || s.rebellion >= 60)) { title = "The Pylon Tyrant"; line = "You decarbonised Britain by sheer force of steel lattice. History forgives; the shires do not."; }
+  else if (s.netZero >= 75) { title = "The Grid Whisperer"; line = "Not quite Net Zero, but the system hums and the lights never flickered on your watch."; }
+  else if (s.stats.batteriesGW >= 8) { title = "The Battery Baron"; line = "You firmed the grid with a wall of lithium. The Dunkelflaute holds no terror for you."; }
+  else if (s.treasury > 3500 && s.netZero < 60) { title = "The Treasury's Darling"; line = "A fortune unspent, a transition unstarted. The Chancellor adores you. The climate does not."; }
+  else if (s.netZero < 50) { title = "The Status-Quo Bureaucrat"; line = "Twelve years of careful minutes, gentle nods, and gas on the margin. The queue endures."; }
+  else { title = "The Steady Hand"; line = "Progress without panache. Britain is greener, solvent, and only mildly furious."; }
+  return { score, title, line };
+}
+
+/* ════════════════════════════ UI COMPONENTS ════════════════════════════ */
+
+const TONE_CLASS = { info: "text-slate-300", good: "text-green-400", warn: "text-amber-400", bad: "text-red-400" };
+
+function Stat({ label, value, sub, color, warnAt }) {
+  return (
+    <div className="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 min-w-[108px]">
+      <div className="text-[10px] uppercase tracking-widest text-slate-400">{label}</div>
+      <div className={`font-term text-lg leading-tight font-bold ${color}`}>{value}</div>
+      {sub && <div className="text-[10px] text-slate-500">{sub}</div>}
+    </div>
+  );
+}
+
+function Header({ s }) {
+  const rebColor = s.rebellion >= 75 ? "text-red-400 blink" : s.rebellion >= 45 ? "text-amber-400" : "text-green-400";
+  const treColor = s.treasury < 400 ? "text-red-400" : s.treasury < 1200 ? "text-amber-400" : "text-green-400";
+  const priColor = s.price > 14 ? "text-red-400" : s.price > 10 ? "text-amber-400" : "text-green-400";
+  return (
+    <header className="shrink-0 bg-[#1e293b] border-b border-slate-700 px-4 py-2 flex items-center gap-3 flex-wrap">
+      <div className="mr-2">
+        <div className="text-green-400 font-term font-bold text-lg leading-none">GRIDLOCK</div>
+        <div className="text-[10px] text-slate-400 tracking-widest">THE GREAT BRITISH UPGRADE</div>
+      </div>
+      <Stat label="Financial Year" value={`${s.year} / ${ECON.totalYears}`} sub={`FY ${2025 + s.year}`} color="text-slate-100" />
+      <Stat label="Treasury" value={fmtM(s.treasury)} sub={`+${fmtM(ECON.baseIncome + (s.policies.carbonLevy ? 300 : 0))}/yr`} color={treColor} />
+      <Stat label="Political Capital" value={`${Math.round(s.pc)} PC`} sub={`+${ECON.pcRegen}/yr`} color={s.pc < 20 ? "text-amber-400" : "text-green-400"} />
+      <Stat label="Wholesale Price" value={fmtP(s.price)} sub="per kWh" color={priColor} />
+      <Stat label="Rebellion Risk" value={`${Math.round(s.rebellion)}%`} sub="coup at 100%" color={rebColor} />
+      <Stat label="Net Zero" value={`${r1(s.netZero)}%`} sub="clean share of demand" color="text-green-400" />
+    </header>
+  );
+}
+
+/* ------------------------------- the map -------------------------------- */
+const GB_PATH = `M168 28 C 180 24 196 32 198 44 L 190 60 C 204 70 212 92 206 112
+C 198 128 192 144 196 160 L 182 172 C 190 190 196 210 192 228
+C 200 250 208 272 206 296 C 214 316 222 332 216 348 L 232 356
+C 248 368 256 388 250 408 C 242 424 236 440 240 456 L 234 470
+C 222 482 204 492 184 494 C 160 500 136 498 118 490 C 100 498 84 504 66 496
+L 50 486 C 60 476 76 472 90 470 C 98 458 96 444 88 436 L 72 430
+C 84 416 96 408 92 394 L 76 392 C 70 378 78 364 90 360 C 84 346 88 332 100 326
+L 90 318 C 102 310 112 302 110 290 C 122 286 130 278 126 266
+C 118 256 116 244 122 234 C 112 226 108 214 114 204 L 126 196
+C 118 186 116 174 124 166 L 108 162 C 100 150 104 136 116 132
+C 106 122 104 108 114 102 L 100 96 C 108 84 120 76 116 64 L 132 60
+C 128 48 140 36 152 36 Z`;
+
+function LinkLine({ link, flows, state, selected, onSelect }) {
+  const def = LINK_DEFS[link];
+  const from = NODE_DEFS[def.from], to = NODE_DEFS[def.to];
+  const cap = state.links[link].cap;
+  const flow = link === "L1" ? flows.flow1 : link === "L2" ? flows.flow2 : flows.flow3;
+  const util = cap > 0 ? flow / cap : 1;
+  const atCap = util >= 0.99;
+  const stroke = atCap ? "#ef4444" : util > 0.75 ? "#fbbf24" : "#4ade80";
+  const midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
+  const isSel = selected && selected.type === "link" && selected.id === link;
+  return (
+    <g className="cursor-pointer" onClick={(e) => { e.stopPropagation(); onSelect({ type: "link", id: link }); }}>
+      {/* fat invisible hit area */}
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="transparent" strokeWidth="18" />
+      {isSel && <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="#38bdf8" strokeWidth="9" strokeOpacity="0.35" />}
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={stroke} strokeWidth={3 + Math.min(cap, 14) * 0.35}
+            strokeLinecap="round" className={atCap ? "pulse-danger" : ""} strokeDasharray={def.subsea ? "7 4" : "none"} />
+      <g transform={`translate(${midX + (link === "L2" ? 14 : link === "L1" ? -2 : -56)}, ${midY + (link === "L3" ? 4 : -6)})`}>
+        <rect x="-4" y="-11" width="62" height={atCap ? 30 : 18} rx="4" fill="#0f172a" stroke={stroke} strokeWidth="0.8" opacity="0.92" />
+        <text x="27" y="2" textAnchor="middle" fontSize="9" className="font-term" fill={stroke} fontWeight="bold">
+          {r1(flow)}/{r1(cap)} GW
+        </text>
+        {atCap && <text x="27" y="14" textAnchor="middle" fontSize="8" fill="#ef4444" fontWeight="bold" className="blink">⚠ BOTTLENECK</text>}
+      </g>
+    </g>
+  );
+}
+
+function NodeCircle({ id, state, flows, selected, onSelect }) {
+  const def = NODE_DEFS[id];
+  const g = flows.g[id];
+  const dem = flows.dem[id];
+  const surplus = g.gen - dem;
+  const isSel = selected && selected.type === "node" && selected.id === id;
+  const fill = surplus > 0.2 ? "#14532d" : "#7f1d1d";
+  const ring = surplus > 0.2 ? "#4ade80" : "#f87171";
+  const queued = state.queue.filter(q => q.nodeId === id).length;
+  return (
+    <g className="cursor-pointer" onClick={(e) => { e.stopPropagation(); onSelect({ type: "node", id }); }}>
+      {isSel && <circle cx={def.x} cy={def.y} r="26" fill="none" stroke="#38bdf8" strokeWidth="2.5" strokeDasharray="4 3" />}
+      <circle cx={def.x} cy={def.y} r="19" fill={fill} stroke={ring} strokeWidth="2.5" className={surplus > 0.2 ? "node-glow" : ""} />
+      <text x={def.x} y={def.y + 1} textAnchor="middle" fontSize="13" fill="#f1f5f9" fontWeight="bold" className="font-term">{id}</text>
+      <text x={def.x} y={def.y + 11} textAnchor="middle" fontSize="6.5" fill={ring} className="font-term">{surplus >= 0 ? "+" : ""}{r1(surplus)}</text>
+      <text x={def.x + (def.labelDX || 0)} y={def.y + (def.labelBelow ? 34 : -26)} textAnchor="middle" fontSize="8.5" fill="#cbd5e1" fontWeight="bold" letterSpacing="1">{def.short}</text>
+      {queued > 0 && (
+        <g>
+          <circle cx={def.x + 17} cy={def.y - 15} r="7.5" fill="#f59e0b" />
+          <text x={def.x + 17} y={def.y - 12} textAnchor="middle" fontSize="9" fill="#1e293b" fontWeight="bold">{queued}</text>
+        </g>
+      )}
+    </g>
+  );
+}
+
+function MapPanel({ state, flows, selected, onSelect }) {
+  return (
+    <div className="h-full flex flex-col bg-[#1e293b] rounded-xl border border-slate-700 overflow-hidden">
+      <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between">
+        <div className="text-xs font-bold tracking-widest text-slate-300">NATIONAL TRANSMISSION MAP</div>
+        <div className="text-[10px] text-slate-500 font-term">projected flows @ avg weather</div>
+      </div>
+      <div className="flex-1 min-h-0 relative" onClick={() => onSelect(null)}>
+        <svg viewBox="0 0 320 560" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <pattern id="gridpat" width="20" height="20" patternUnits="userSpaceOnUse">
+              <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#334155" strokeWidth="0.4" />
+            </pattern>
+          </defs>
+          <rect width="320" height="560" fill="url(#gridpat)" opacity="0.5" />
+          <path d={GB_PATH} fill="#273548" stroke="#475569" strokeWidth="1.5" />
+          <LinkLine link="L1" flows={flows} state={state} selected={selected} onSelect={onSelect} />
+          <LinkLine link="L3" flows={flows} state={state} selected={selected} onSelect={onSelect} />
+          <LinkLine link="L2" flows={flows} state={state} selected={selected} onSelect={onSelect} />
+          {["A", "B", "C", "D"].map(id => (
+            <NodeCircle key={id} id={id} state={state} flows={flows} selected={selected} onSelect={onSelect} />
+          ))}
+          <text x="12" y="546" fontSize="8" fill="#64748b" className="font-term">node badge = local surplus/deficit GW · amber dot = projects in queue · dashed = subsea boundary</text>
+        </svg>
+      </div>
+      <div className="px-3 py-1.5 border-t border-slate-700 flex gap-4 text-[10px] font-term">
+        <span className="text-green-400">■ flowing</span>
+        <span className="text-amber-400">■ &gt;75% loaded</span>
+        <span className="text-red-400">■ at ceiling — curtailment</span>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------- right panel tabs ---------------------------- */
+function Bar({ value, max, color }) {
+  return (
+    <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+      <div className={`h-full ${color} transition-all duration-500`} style={{ width: `${clamp((value / max) * 100, 0, 100)}%` }} />
+    </div>
+  );
+}
+
+function DefaultTab({ state, flows, dispatch }) {
+  const [showMech, setShowMech] = useState(false);
+  const margin = firmCoverGW(state) + flows.cleanDelivered - flows.demand;
+  const nextDemand = demandForYear(Math.min(state.year + 1, 12), state.demandExtra) + state.demandExtraD;
+  return (
+    <div className="space-y-3">
+      <Section title="NATIONAL DASHBOARD">
+        <Row k="Demand this year" v={fmtGW(flows.demand)} />
+        <Row k="Demand next year" v={fmtGW(nextDemand)} tone="warn" />
+        <Row k="Demand by Year 12" v={fmtGW(65 + state.demandExtra + state.demandExtraD)} tone="warn" />
+        <Row k="Gas backup fleet" v={fmtGW(state.gasFleet)} tone={state.gasFleet < flows.gasNeeded ? "bad" : null} />
+        <Row k="Firm imports" v={fmtGW(state.firmImports)} />
+        <Row k="Public approval" v={`${Math.round(state.approval)}%`} tone={state.approval < 35 ? "bad" : null} />
+        <div className="mt-2">
+          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+            <span>GRID INTERMITTENCY RISK</span>
+            <span className={state.intermittency > 40 ? "text-red-400 font-bold" : "text-slate-300"}>{state.intermittency}% {state.intermittency > 40 ? "⚠ UNSTABLE" : "(instability above 40%)"}</span>
+          </div>
+          <Bar value={state.intermittency} max={60} color={state.intermittency > 40 ? "bg-red-500" : state.intermittency > 25 ? "bg-amber-400" : "bg-green-500"} />
+        </div>
+        <div className="mt-2">
+          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+            <span>SUPPLY MARGIN (clean + firm − demand)</span>
+            <span className={margin < 3 ? "text-red-400 font-bold" : "text-green-400"}>{margin >= 0 ? "+" : ""}{r1(margin)} GW</span>
+          </div>
+          <Bar value={Math.max(margin, 0)} max={20} color={margin < 3 ? "bg-red-500" : margin < 8 ? "bg-amber-400" : "bg-green-500"} />
+        </div>
+      </Section>
+
+      <Section title="GLOBAL POLICY LEVERS">
+        <PolicyBtn
+          done={state.policies.queueReform}
+          title="Enact Gated Queue Reform"
+          desc={`Connection delay 4 yrs → 1 yr, forever. Costs 25 PC, +20% Rebellion (industry uproar).`}
+          enabled={state.pc >= 25}
+          onClick={() => dispatch({ type: "policy", id: "queueReform" })}
+          doneLabel="QUEUE REFORMED — 1 yr connections"
+        />
+        <PolicyBtn
+          done={state.policies.carbonLevy}
+          title="Introduce Carbon Levy"
+          desc="+£300m/yr revenue, wholesale +1.2p, +8% Rebellion, costs 10 PC. Retires 1.5 GW of gas fleet each year."
+          enabled={state.pc >= 10}
+          onClick={() => dispatch({ type: "policy", id: "carbonLevy" })}
+          doneLabel="CARBON LEVY ACTIVE"
+        />
+        <button
+          disabled={state.whipsUsed || state.pc < 20}
+          onClick={() => dispatch({ type: "whips" })}
+          className="w-full text-left px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+        >
+          <div className="text-sm font-bold text-slate-100">🥃 Whips' Operation <span className="text-slate-400 font-normal">(once per year)</span></div>
+          <div className="text-[11px] text-slate-400">Spend 20 PC → Rebellion Risk −12%. {state.whipsUsed ? "Already deployed this year." : ""}</div>
+        </button>
+      </Section>
+
+      <Section title={`CONNECTIONS QUEUE (${state.queue.length + state.linkQueue.length})`}>
+        {state.queue.length + state.linkQueue.length === 0 && <div className="text-[11px] text-slate-500 italic">Queue empty. Suspiciously tidy.</div>}
+        {state.queue.map(q => (
+          <div key={q.uid} className="flex justify-between items-center text-[11px] py-0.5">
+            <span className="text-slate-300">{ASSET_TYPES[q.type].icon} {q.label} → {NODE_DEFS[q.nodeId].short}</span>
+            <span className="font-term text-amber-400">{q.turnsLeft} yr</span>
+          </div>
+        ))}
+        {state.linkQueue.map(q => (
+          <div key={q.uid} className="flex justify-between items-center text-[11px] py-0.5">
+            <span className="text-slate-300">⚡ {q.label} → {LINK_DEFS[q.linkId].name}</span>
+            <span className="font-term text-amber-400">{q.turnsLeft} yr</span>
+          </div>
+        ))}
+      </Section>
+
+      <Section title="MECHANICS (FULL TRANSPARENCY)">
+        <button onClick={() => setShowMech(v => !v)} className="text-[11px] text-sky-400 hover:text-sky-300">{showMech ? "▾ hide the maths" : "▸ show the maths"}</button>
+        {showMech && (
+          <div className="text-[10.5px] text-slate-400 font-term space-y-1 mt-1 leading-relaxed">
+            <div>price = 3.5 + 0.19·gasGW + 0.12·curtailGW (+1.2 levy)</div>
+            <div>curtail fine = £40m × excess GW over boundary cap</div>
+            <div>battery: absorbs 0.5·GW of spill locally + 0.5·GW firm cover</div>
+            <div>intermittency = (wind+solar − 2.5·(nuclear+battery+imports)) / demand</div>
+            <div>net zero = 1 − gasFired/demand</div>
+            <div>blackout if unserved &gt; 1.5 GW · brownout penalty below that</div>
+            <div>income £600m/yr (+£300m levy) · gas fuel £9m per GW fired</div>
+            <div>wind capacity factor drawn 75–105% yearly (5% in a Dunkelflaute)</div>
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function Section({ title, children }) {
+  return (
+    <div className="bg-slate-800/60 border border-slate-700 rounded-lg p-3">
+      <div className="text-[10px] font-bold tracking-widest text-slate-400 mb-2">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Row({ k, v, tone }) {
+  const c = tone === "bad" ? "text-red-400" : tone === "warn" ? "text-amber-400" : "text-slate-100";
+  return (
+    <div className="flex justify-between text-[12px] py-0.5">
+      <span className="text-slate-400">{k}</span>
+      <span className={`font-term font-bold ${c}`}>{v}</span>
+    </div>
+  );
+}
+
+function PolicyBtn({ done, title, desc, enabled, onClick, doneLabel }) {
+  if (done) return (
+    <div className="w-full px-3 py-2 rounded-lg border border-green-700 bg-green-900/30 mb-2">
+      <div className="text-sm font-bold text-green-400">✓ {doneLabel}</div>
+    </div>
+  );
+  return (
+    <button onClick={onClick} disabled={!enabled}
+      className="w-full text-left px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition mb-2">
+      <div className="text-sm font-bold text-slate-100">📜 {title}</div>
+      <div className="text-[11px] text-slate-400">{desc}</div>
+      {!enabled && <div className="text-[10px] text-red-400 mt-0.5">Insufficient Political Capital</div>}
+    </button>
+  );
+}
+
+function NodeTab({ state, flows, nodeId, dispatch }) {
+  const def = NODE_DEFS[nodeId];
+  const g = flows.g[nodeId];
+  const dem = flows.dem[nodeId];
+  const nimby = state.nimby[nodeId];
+  const mix = state.assets.filter(a => a.nodeId === nodeId);
+  const queued = state.queue.filter(q => q.nodeId === nodeId);
+  const delay = state.policies.queueReform ? ECON.queueDelayReformed : ECON.queueDelayDefault;
+  return (
+    <div className="space-y-3">
+      <Section title={`NODE ${nodeId} — ${def.name.toUpperCase()}`}>
+        <div className="text-[11px] text-slate-400 italic mb-2">{def.blurb}</div>
+        <Row k="Local demand" v={fmtGW(dem)} />
+        <Row k="Local clean output (avg weather)" v={fmtGW(g.gen)} tone={g.gen < dem ? "warn" : null} />
+        <Row k="Battery capacity here" v={fmtGW(g.battery)} />
+        <div className="mt-2">
+          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+            <span>NIMBY OPPOSITION</span>
+            <span className={nimby > 70 ? "text-red-400 font-bold" : nimby > 45 ? "text-amber-400" : "text-green-400"}>{Math.round(nimby)}%{nimby > 70 ? " ⚠ flashpoint" : ""}</span>
+          </div>
+          <Bar value={nimby} max={100} color={nimby > 70 ? "bg-red-500" : nimby > 45 ? "bg-amber-400" : "bg-green-500"} />
+          <div className="text-[10px] text-slate-500 mt-1">Above 70% at year end: +4% Rebellion. Decays −6/yr.</div>
+        </div>
+      </Section>
+
+      <Section title="CURRENT GENERATION MIX">
+        {mix.length === 0 && <div className="text-[11px] text-slate-500 italic">Nothing but pylons and regret.</div>}
+        {mix.map(a => (
+          <div key={a.uid} className="flex justify-between text-[11px] py-0.5">
+            <span className="text-slate-300">{a.icon} {a.name}</span>
+            <span className="font-term text-green-400">{fmtGW(a.gw)}</span>
+          </div>
+        ))}
+        {queued.map(q => (
+          <div key={q.uid} className="flex justify-between text-[11px] py-0.5 opacity-60">
+            <span className="text-slate-400">{ASSET_TYPES[q.type].icon} {q.label} (queued)</span>
+            <span className="font-term text-amber-400">{q.turnsLeft} yr</span>
+          </div>
+        ))}
+      </Section>
+
+      <Section title={`COMMISSION NEW ASSETS (connect in ${delay} yr${delay > 1 ? "s" : ""})`}>
+        {Object.values(ASSET_TYPES).map(t => {
+          if (t.id === "offshore" && !def.offshoreOk) return null;
+          const yieldMult = t.kind === "battery" ? 1 : def.yields[t.kind];
+          const effGW = r1(t.gw * yieldMult);
+          const cost = Math.round(t.cost * (t.id === "battery" ? state.batteryDiscount : 1));
+          const afford = state.treasury >= cost;
+          return (
+            <button key={t.id} disabled={!afford}
+              onClick={() => dispatch({ type: "build", nodeId, assetId: t.id })}
+              className="w-full text-left px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition mb-1.5">
+              <div className="flex justify-between items-baseline">
+                <span className="text-[12.5px] font-bold text-slate-100">{t.icon} {t.name}</span>
+                <span className={`font-term text-[12px] ${afford ? "text-green-400" : "text-red-400"}`}>{fmtM(cost)}</span>
+              </div>
+              <div className="text-[10.5px] text-slate-400">
+                {t.kind === "battery" ? `${effGW} GW storage` : `${effGW} GW here`}
+                {yieldMult !== 1 && t.kind !== "battery" ? ` (regional yield ×${yieldMult})` : ""} · NIMBY +{Math.round(t.nimby * def.nimbyFactor)} · {t.desc}
+              </div>
+            </button>
+          );
+        })}
+      </Section>
+    </div>
+  );
+}
+
+function LinkTab({ state, flows, linkId, dispatch }) {
+  const def = LINK_DEFS[linkId];
+  const cap = state.links[linkId].cap;
+  const flow = linkId === "L1" ? flows.flow1 : linkId === "L2" ? flows.flow2 : flows.flow3;
+  const util = cap > 0 ? flow / cap : 1;
+  const pending = state.linkQueue.filter(q => q.linkId === linkId);
+  return (
+    <div className="space-y-3">
+      <Section title={`TRANSMISSION BOUNDARY — ${def.name.toUpperCase()}`}>
+        <Row k="Capacity" v={fmtGW(cap)} />
+        <Row k="Projected flow (avg weather)" v={fmtGW(flow)} tone={util >= 0.99 ? "bad" : util > 0.75 ? "warn" : null} />
+        <div className="mt-2">
+          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+            <span>UTILISATION</span>
+            <span className={util >= 0.99 ? "text-red-400 font-bold" : "text-slate-300"}>{Math.round(util * 100)}%{util >= 0.99 ? " ⚠ SATURATED" : ""}</span>
+          </div>
+          <Bar value={util * 100} max={100} color={util >= 0.99 ? "bg-red-500" : util > 0.75 ? "bg-amber-400" : "bg-green-500"} />
+        </div>
+        {util >= 0.99 && (
+          <div className="mt-2 text-[11px] text-red-400 bg-red-950/40 border border-red-800 rounded p-2">
+            ⚠ Boundary saturated. Surplus generation upstream will be <b>curtailed</b> (£40m/GW fine) and replaced by southern gas peakers, spiking the wholesale price.
+          </div>
+        )}
+        {pending.map(q => (
+          <div key={q.uid} className="mt-2 text-[11px] text-amber-400">⏳ {q.label} energising in {q.turnsLeft} yr</div>
+        ))}
+      </Section>
+
+      <Section title="REINFORCEMENT OPTIONS">
+        {Object.values(LINK_UPGRADES).map(u => {
+          const afford = state.treasury >= u.cost;
+          return (
+            <button key={u.id} disabled={!afford}
+              onClick={() => dispatch({ type: "upgradeLink", linkId, upgradeId: u.id })}
+              className="w-full text-left px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition mb-1.5">
+              <div className="flex justify-between items-baseline">
+                <span className="text-[12.5px] font-bold text-slate-100">{u.icon} {u.id === "hvdc" && !def.subsea ? "Underground HVDC Cable" : u.name}</span>
+                <span className={`font-term text-[12px] ${afford ? "text-green-400" : "text-red-400"}`}>{fmtM(u.cost)}</span>
+              </div>
+              <div className="text-[10.5px] text-slate-400">{u.desc}</div>
+            </button>
+          );
+        })}
+      </Section>
+    </div>
+  );
+}
+
+function RightPanel({ state, flows, selected, dispatch }) {
+  const title = !selected ? "SYSTEM COMMAND" : selected.type === "node" ? `NODE ${selected.id}` : LINK_DEFS[selected.id].name.toUpperCase();
+  return (
+    <div className="h-full flex flex-col bg-[#1e293b] rounded-xl border border-slate-700 overflow-hidden">
+      <div className="px-3 py-2 border-b border-slate-700 flex items-center justify-between shrink-0">
+        <div className="text-xs font-bold tracking-widest text-slate-300">{title}</div>
+        {selected && <button onClick={() => dispatch({ type: "select", sel: null })} className="text-[10px] text-sky-400 hover:text-sky-300">← back to national view</button>}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto p-3">
+        {!selected && <DefaultTab state={state} flows={flows} dispatch={dispatch} />}
+        {selected && selected.type === "node" && <NodeTab state={state} flows={flows} nodeId={selected.id} dispatch={dispatch} />}
+        {selected && selected.type === "link" && <LinkTab state={state} flows={flows} linkId={selected.id} dispatch={dispatch} />}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------- bottom console ---------------------------- */
+function Console({ state, dispatch }) {
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [state.log.length]);
+  const busy = state.phase !== "play";
+  return (
+    <div className="shrink-0 bg-[#0f172a] border border-slate-700 rounded-xl flex items-stretch gap-0 overflow-hidden" style={{ height: "150px" }}>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <div className="px-3 py-1 border-b border-slate-800 text-[10px] font-bold tracking-widest text-slate-500 flex justify-between">
+          <span>📡 WESTMINSTER WIRE — LIVE</span>
+          <span className="font-term">{state.log.length} dispatches</span>
+        </div>
+        <div ref={ref} className="flex-1 overflow-y-auto px-3 py-1.5 font-term text-[11.5px] leading-relaxed">
+          {state.log.map((e, i) => (
+            <div key={i} className={TONE_CLASS[e.tone]}>
+              <span className="text-slate-600">[{e.year === 0 ? "BRIEF" : `FY${e.year}`}]</span> {e.text}
+            </div>
+          ))}
+        </div>
+      </div>
+      <button
+        onClick={() => dispatch({ type: "advance" })}
+        disabled={busy}
+        className="w-44 shrink-0 m-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 font-bold text-sm tracking-wide transition flex flex-col items-center justify-center gap-1">
+        <span className="text-2xl">⏭</span>
+        <span>ADVANCE<br />FINANCIAL YEAR</span>
+        <span className="font-term text-[10px] opacity-80">FY{state.year} → {state.year >= 12 ? "FINAL AUDIT" : `FY${state.year + 1}`}</span>
+      </button>
+    </div>
+  );
+}
+
+/* -------------------------------- modals -------------------------------- */
+function ModalShell({ children, tone }) {
+  const border = tone === "bad" ? "border-red-600" : tone === "good" ? "border-green-600" : "border-amber-500";
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+      <div className={`slide-up w-full max-w-lg bg-[#1e293b] border-2 ${border} rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function CrisisModal({ state, dispatch }) {
+  const card = state.activeCrisis;
+  if (!card) return null;
+  return (
+    <ModalShell tone="warn">
+      <div className="text-[10px] font-bold tracking-widest text-amber-400 mb-1">⚠ WESTMINSTER CRISIS — FY{state.year} — A DECISION IS REQUIRED</div>
+      <h2 className="text-xl font-bold text-slate-100 mb-2">{card.title}</h2>
+      <p className="text-[13px] text-slate-300 mb-4 leading-relaxed">{card.body(state)}</p>
+      <div className="space-y-2">
+        {card.choices.map((c, i) => {
+          const ok = c.can ? c.can(state) : true;
+          return (
+            <button key={i} disabled={!ok}
+              onClick={() => dispatch({ type: "crisisChoice", fx: c.fx })}
+              className="w-full text-left px-4 py-3 rounded-lg border border-slate-600 bg-slate-800 hover:bg-slate-700 hover:border-amber-500 disabled:opacity-40 disabled:cursor-not-allowed transition">
+              <div className="text-sm font-bold text-slate-100">{String.fromCharCode(65 + i)}. {c.label}</div>
+              <div className="text-[11px] text-slate-400">{c.detail}{!ok ? " — UNAFFORDABLE" : ""}</div>
+            </button>
+          );
+        })}
+      </div>
+    </ModalShell>
+  );
+}
+
+function GameOverModal({ state, dispatch }) {
+  const go = state.gameOver;
+  const T = {
+    bankrupt: { h: "💷 NATIONAL BANKRUPTCY", c: "The money ran out before the wind picked up." },
+    coup:     { h: "🗳 BACKBENCH COUP",      c: "The men in grey suits arrived between the soup and the fish course." },
+    blackout: { h: "🕯 NATIONAL BLACKOUT",   c: "Britain went dark. The inquiry will last longer than your career did." },
+  }[go.type];
+  return (
+    <ModalShell tone="bad">
+      <h2 className="text-2xl font-bold text-red-400 mb-2">{T.h}</h2>
+      <p className="text-slate-300 text-sm mb-1">{T.c}</p>
+      <p className="text-slate-400 text-[12px] mb-4 font-term">{go.detail}</p>
+      <div className="grid grid-cols-2 gap-2 text-[12px] mb-4">
+        <Row k="Years survived" v={`${state.year} / 12`} />
+        <Row k="Final Net Zero" v={`${r1(state.netZero)}%`} />
+        <Row k="Curtailment fines" v={fmtM(state.stats.fines)} />
+        <Row k="Assets built" v={state.stats.built} />
+      </div>
+      <button onClick={() => dispatch({ type: "restart" })}
+        className="w-full py-3 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold transition">
+        RESIGN & RUN IT BACK
+      </button>
+    </ModalShell>
+  );
+}
+
+function ReportModal({ state, dispatch }) {
+  const rep = finalReport(state);
+  return (
+    <ModalShell tone="good">
+      <div className="text-[10px] font-bold tracking-widest text-green-400 mb-1">FINAL MINISTERIAL REPORT CARD — TWELVE YEARS IN THE CHAIR</div>
+      <h2 className="text-2xl font-bold text-slate-100 mb-1">“{rep.title}”</h2>
+      <p className="text-[13px] text-slate-300 italic mb-3">{rep.line}</p>
+      <div className="bg-slate-800/70 border border-slate-700 rounded-lg p-3 mb-3">
+        <div className="text-center mb-2">
+          <span className="text-[10px] text-slate-400 tracking-widest">HISTORICAL LEGACY SCORE</span>
+          <div className="font-term text-4xl font-bold text-green-400">{rep.score}</div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 text-[12px]">
+          <Row k="Net Zero achieved" v={`${r1(state.netZero)}%`} />
+          <Row k="Treasury remaining" v={fmtM(state.treasury)} />
+          <Row k="Rebellion Risk" v={`${Math.round(state.rebellion)}%`} />
+          <Row k="Public approval" v={`${Math.round(state.approval)}%`} />
+          <Row k="Assets commissioned" v={state.stats.built} />
+          <Row k="Battery fleet" v={fmtGW(state.stats.batteriesGW)} />
+          <Row k="Total curtailment fines" v={fmtM(state.stats.fines)} tone={state.stats.fines > 500 ? "bad" : null} />
+          <Row k="Peak wholesale price" v={fmtP(state.stats.peakPrice)} />
+          <Row k="Pylon routes forced" v={state.stats.pylons} />
+          <Row k="Routes undergrounded" v={state.stats.underground} />
+          <Row k="Brownout events" v={state.stats.brownouts} tone={state.stats.brownouts > 0 ? "bad" : null} />
+          <Row k="Gas burned (GW-yrs)" v={r1(state.stats.gasBurned)} />
+        </div>
+      </div>
+      <button onClick={() => dispatch({ type: "restart" })}
+        className="w-full py-3 rounded-lg bg-green-600 hover:bg-green-500 text-slate-900 font-bold transition">
+        ACCEPT PEERAGE & START A NEW TERM
+      </button>
+    </ModalShell>
+  );
+}
+
+function IntroModal({ dispatch }) {
+  return (
+    <ModalShell tone="good">
+      <div className="text-[10px] font-bold tracking-widest text-green-400 mb-1">CLASSIFIED — CHAIR'S EYES ONLY</div>
+      <h2 className="text-2xl font-bold text-slate-100 mb-2">GridLock: The Great British Upgrade</h2>
+      <div className="text-[13px] text-slate-300 space-y-2 leading-relaxed mb-4">
+        <p>Welcome to NESO, Chair. Here is the problem in one sentence: <span className="text-green-400">the wind is in Scotland, the demand is in London, and the wires in between are forty years old.</span></p>
+        <p>You have <b className="text-green-400">12 financial years</b> and <b className="text-green-400">£3,000m</b> to reach 100% Net Zero. Demand will nearly double. The connections queue takes <b className="text-amber-400">4 years</b>. The backbenches are watching.</p>
+        <ul className="text-[12px] text-slate-400 list-disc pl-5 space-y-1">
+          <li><b className="text-slate-300">Click nodes</b> to commission wind, solar, nuclear and batteries.</li>
+          <li><b className="text-slate-300">Click the lines</b> — when they pulse red, you're curtailing clean power and paying for it.</li>
+          <li><b className="text-slate-300">Batteries and nuclear</b> keep the grid stable when the wind dies.</li>
+          <li>Lose if the Treasury hits zero, Rebellion hits 100%, or the lights go out.</li>
+        </ul>
+      </div>
+      <button onClick={() => dispatch({ type: "begin" })}
+        className="w-full py-3 rounded-lg bg-green-600 hover:bg-green-500 text-slate-900 font-bold transition">
+        ⚡ TAKE THE CHAIR
+      </button>
+    </ModalShell>
+  );
+}
+
+/* ------------------------------ root app -------------------------------- */
+function App() {
+  const [state, setState] = useState(initialState);
+  const [selected, setSelected] = useState(null);
+
+  /* projected flows at average weather — drives the live map + panels */
+  const flows = useMemo(() => computeFlows(state, 0.9, 0.9), [state]);
+
+  function dispatch(action) {
+    switch (action.type) {
+      case "begin":
+        setState(s => ({ ...s, phase: "play" }));
+        break;
+      case "select":
+        setSelected(action.sel);
+        break;
+      case "build": {
+        setState(s => {
+          const t = ASSET_TYPES[action.assetId];
+          const def = NODE_DEFS[action.nodeId];
+          const cost = Math.round(t.cost * (t.id === "battery" ? s.batteryDiscount : 1));
+          if (s.treasury < cost) return s;
+          const yieldMult = t.kind === "battery" ? 1 : def.yields[t.kind];
+          const effGW = r1(t.gw * yieldMult);
+          const delay = s.policies.queueReform ? ECON.queueDelayReformed : ECON.queueDelayDefault;
+          return {
+            ...s,
+            treasury: s.treasury - cost,
+            nimby: { ...s.nimby, [action.nodeId]: clamp(s.nimby[action.nodeId] + t.nimby * def.nimbyFactor, 0, 100) },
+            stats: { ...s.stats, built: s.stats.built + 1 },
+            queue: [...s.queue, { uid: Math.random().toString(36).slice(2, 9), type: t.id, nodeId: action.nodeId, gw: effGW, turnsLeft: delay, label: `${t.name} ${effGW} GW` }],
+            log: [...s.log, { year: s.year, tone: "info", text: `PROCUREMENT: ${t.name} (${effGW} GW) ordered at ${def.short} for ${fmtM(cost)}. Gate 1 entry — connects in ${delay} yr${delay > 1 ? "s" : ""}.` }],
+          };
+        });
+        break;
+      }
+      case "upgradeLink": {
+        setState(s => {
+          const u = LINK_UPGRADES[action.upgradeId];
+          if (s.treasury < u.cost) return s;
+          const def = LINK_DEFS[action.linkId];
+          const next = {
+            ...s,
+            treasury: s.treasury - u.cost,
+            linkQueue: [...s.linkQueue, { uid: Math.random().toString(36).slice(2, 9), linkId: action.linkId, addGW: u.addGW, turnsLeft: u.delay, label: `${u.name} +${u.addGW} GW` }],
+            stats: { ...s.stats, pylons: s.stats.pylons + (u.id === "pylon" ? 1 : 0), hvdc: s.stats.hvdc + (u.id === "hvdc" ? 1 : 0) },
+            log: [...s.log, { year: s.year, tone: u.id === "pylon" ? "warn" : "info", text: `TRANSMISSION: ${u.name} ordered on ${def.name} (+${u.addGW} GW, ${u.delay} yr) for ${fmtM(u.cost)}.` }],
+          };
+          if (u.rebellion > 0) {
+            next.rebellion = clamp(s.rebellion + u.rebellion, 0, 100);
+            next.nimby = { ...s.nimby, [def.from]: clamp(s.nimby[def.from] + 10, 0, 100), [def.to]: clamp(s.nimby[def.to] + 10, 0, 100) };
+            next.log = [...next.log, { year: s.year, tone: "warn", text: `BACKLASH: pylon march announced along the ${def.name} corridor. Rebellion +${u.rebellion}%.` }];
+          }
+          return next;
+        });
+        break;
+      }
+      case "policy": {
+        setState(s => {
+          if (action.id === "queueReform" && !s.policies.queueReform && s.pc >= 25) {
+            return {
+              ...s, pc: s.pc - 25, rebellion: clamp(s.rebellion + 20, 0, 100),
+              policies: { ...s.policies, queueReform: true },
+              queue: s.queue.map(q => ({ ...q, turnsLeft: Math.min(q.turnsLeft, ECON.queueDelayReformed) })),
+              log: [...s.log, { year: s.year, tone: "warn", text: "GATED QUEUE REFORM ENACTED: zombie projects culled, connections now 1 year. Industry lawyers issue 47 furious press releases. −25 PC, Rebellion +20%." }],
+            };
+          }
+          if (action.id === "carbonLevy" && !s.policies.carbonLevy && s.pc >= 10) {
+            return {
+              ...s, pc: s.pc - 10, rebellion: clamp(s.rebellion + 8, 0, 100),
+              policies: { ...s.policies, carbonLevy: true },
+              log: [...s.log, { year: s.year, tone: "warn", text: "CARBON LEVY INTRODUCED: +£300m/yr, wholesale +1.2p, gas fleet begins early retirement. −10 PC, Rebellion +8%." }],
+            };
+          }
+          return s;
+        });
+        break;
+      }
+      case "whips": {
+        setState(s => {
+          if (s.whipsUsed || s.pc < 20) return s;
+          return {
+            ...s, pc: s.pc - 20, rebellion: clamp(s.rebellion - 12, 0, 100), whipsUsed: true,
+            log: [...s.log, { year: s.year, tone: "good", text: "WHIPS' OPERATION: late-night calls, two knighthood hints, one upgraded office. Rebellion −12%." }],
+          };
+        });
+        break;
+      }
+      case "advance": {
+        setState(s => {
+          if (s.phase !== "play") return s;
+          const card = s.deck[(s.year - 1) % s.deck.length];
+          return { ...s, phase: "crisis", activeCrisis: card };
+        });
+        break;
+      }
+      case "crisisChoice": {
+        setState(s => {
+          const { state: afterCrisis, mods } = applyCrisisChoice(s, action.fx);
+          if (afterCrisis.treasury < 0) {
+            return { ...afterCrisis, phase: "dead", activeCrisis: null, gameOver: { type: "bankrupt", detail: `The crisis response overdrew the Treasury (${fmtM(afterCrisis.treasury)}).` } };
+          }
+          if (afterCrisis.rebellion >= 100) {
+            return { ...afterCrisis, phase: "dead", activeCrisis: null, gameOver: { type: "coup", detail: "The crisis decision was the final straw. The letters went in that afternoon." } };
+          }
+          return resolveYear({ ...afterCrisis, activeCrisis: null }, mods);
+        });
+        setSelected(null);
+        break;
+      }
+      case "restart":
+        setState(initialState());
+        setSelected(null);
+        break;
+      default: break;
+    }
+  }
+
+  return (
+    <div className="h-screen w-screen flex flex-col bg-[#0f172a] text-slate-100 overflow-hidden">
+      <Header s={state} />
+      <main className="flex-1 min-h-0 p-3 grid grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] gap-3">
+        <MapPanel state={state} flows={flows} selected={selected} onSelect={sel => dispatch({ type: "select", sel })} />
+        <RightPanel state={state} flows={flows} selected={selected} dispatch={dispatch} />
+      </main>
+      <div className="px-3 pb-3">
+        <Console state={state} dispatch={dispatch} />
+      </div>
+      {state.phase === "intro" && <IntroModal dispatch={dispatch} />}
+      {state.phase === "crisis" && <CrisisModal state={state} dispatch={dispatch} />}
+      {state.phase === "dead" && state.gameOver && <GameOverModal state={state} dispatch={dispatch} />}
+      {state.phase === "report" && <ReportModal state={state} dispatch={dispatch} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
