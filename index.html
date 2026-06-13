@@ -2,7 +2,7 @@
 <html lang="en-GB">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>GridLock: The Great British Upgrade</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -10,6 +10,10 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   html, body { background: #0f172a; overscroll-behavior: none; }
+  body { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  /* dynamic viewport height so mobile browser chrome doesn't crop the app */
+  .h-app { height: 100vh; height: 100dvh; }
+  .map-svg { touch-action: none; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: #1e293b; }
   ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -828,10 +832,10 @@ const TONE_CLASS = { info: "text-slate-300", good: "text-green-400", warn: "text
 
 function Stat({ label, value, sub, color }) {
   return (
-    <div className="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 min-w-[104px]">
-      <div className="text-[10px] uppercase tracking-widest text-slate-400">{label}</div>
-      <div className={`font-term text-lg leading-tight font-bold ${color}`}>{value}</div>
-      {sub && <div className="text-[10px] text-slate-500">{sub}</div>}
+    <div className="shrink-0 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 min-w-[82px] sm:min-w-[104px]">
+      <div className="text-[9px] sm:text-[10px] uppercase tracking-widest text-slate-400 whitespace-nowrap">{label}</div>
+      <div className={`font-term text-base sm:text-lg leading-tight font-bold ${color}`}>{value}</div>
+      {sub && <div className="text-[9px] sm:text-[10px] text-slate-500 whitespace-nowrap">{sub}</div>}
     </div>
   );
 }
@@ -841,19 +845,21 @@ function Header({ s, muted, onToggleMute }) {
   const treColor = s.treasury < 400 ? "text-red-400" : s.treasury < 1200 ? "text-amber-400" : "text-green-400";
   const priColor = s.price > 14 ? "text-red-400" : s.price > 10 ? "text-amber-400" : "text-green-400";
   return (
-    <header className="shrink-0 bg-[#1e293b] border-b border-slate-700 px-4 py-2 flex items-center gap-3 flex-wrap">
-      <div className="mr-2">
-        <div className="text-green-400 font-term font-bold text-lg leading-none">GRIDLOCK</div>
-        <div className="text-[10px] text-slate-400 tracking-widest">THE GREAT BRITISH UPGRADE</div>
+    <header className="shrink-0 bg-[#1e293b] border-b border-slate-700 px-2 sm:px-4 py-1.5 sm:py-2 flex items-center gap-2 sm:gap-3">
+      <div className="shrink-0">
+        <div className="text-green-400 font-term font-bold text-base sm:text-lg leading-none">GRIDLOCK</div>
+        <div className="hidden sm:block text-[10px] text-slate-400 tracking-widest">THE GREAT BRITISH UPGRADE</div>
       </div>
-      <Stat label="Financial Year" value={`${s.year} / ${ECON.totalYears}`} sub={`FY ${2025 + s.year}`} color="text-slate-100" />
-      <Stat label="Treasury" value={fmtM(s.treasury)} sub={`+${fmtM(ECON.baseIncome + (s.year - 1) * 30 + (s.policies.carbonLevy ? 300 : 0))}/yr`} color={treColor} />
-      <Stat label="Political Capital" value={`${Math.round(s.pc)} PC`} sub={`+${ECON.pcRegen}/yr`} color={s.pc < 20 ? "text-amber-400" : "text-green-400"} />
-      <Stat label="Wholesale Price" value={fmtP(s.price)} sub="per kWh" color={priColor} />
-      <Stat label="Rebellion Risk" value={`${Math.round(s.rebellion)}%`} sub="coup at 100%" color={rebColor} />
-      <Stat label="Net Zero" value={`${r1(s.netZero)}%`} sub="clean share of demand" color="text-green-400" />
+      <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto flex-1 min-w-0 py-0.5">
+        <Stat label="Year" value={`${s.year} / ${ECON.totalYears}`} sub={`FY ${2025 + s.year}`} color="text-slate-100" />
+        <Stat label="Treasury" value={fmtM(s.treasury)} sub={`+${fmtM(ECON.baseIncome + (s.year - 1) * 30 + (s.policies.carbonLevy ? 300 : 0))}/yr`} color={treColor} />
+        <Stat label="Pol. Capital" value={`${Math.round(s.pc)} PC`} sub={`+${ECON.pcRegen}/yr`} color={s.pc < 20 ? "text-amber-400" : "text-green-400"} />
+        <Stat label="Price" value={fmtP(s.price)} sub="per kWh" color={priColor} />
+        <Stat label="Rebellion" value={`${Math.round(s.rebellion)}%`} sub="coup at 100%" color={rebColor} />
+        <Stat label="Net Zero" value={`${r1(s.netZero)}%`} sub="clean share" color="text-green-400" />
+      </div>
       <button onClick={onToggleMute} title={muted ? "Unmute" : "Mute"}
-        className="ml-auto px-2.5 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-lg leading-none">
+        className="shrink-0 px-2 sm:px-2.5 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-lg leading-none">
         {muted ? "🔇" : "🔊"}
       </button>
     </header>
@@ -1076,8 +1082,11 @@ function MapPanel({ state, flows, selected, onSelect, svgRef, dragUI, onStartDra
   const [view, setView] = useState(HOME_VIEW);
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
-  const panRef = useRef(null);
   const panMovedRef = useRef(false);
+  const pointersRef = useRef(new Map());   // pointerId -> {x,y}
+  const gestureRef = useRef(null);          // {type:'pan',sx,sy,ox,oy} | {type:'pinch',lastDist}
+  const moveRef = useRef(null);
+  const upRef = useRef(null);
 
   const clampView = v => {
     const w = clamp(v.w, 80, 320), h = w * 1.75;
@@ -1107,21 +1116,50 @@ function MapPanel({ state, flows, selected, onSelect, svgRef, dragUI, onStartDra
     svg.addEventListener("wheel", onWheel, { passive: false });
     return () => svg.removeEventListener("wheel", onWheel);
   }, []);
-  const startPan = e => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    panRef.current = { sx: e.clientX, sy: e.clientY, ox: viewRef.current.x, oy: viewRef.current.y };
-    const move = ev => {
-      const pr = panRef.current; if (!pr) return;
+  /* unified pointer gesture: one finger/mouse pans, two fingers pinch-zoom */
+  moveRef.current = e => {
+    const ptrs = pointersRef.current;
+    if (!ptrs.has(e.pointerId)) return;           // not a map gesture
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const list = [...ptrs.values()];
+    if (list.length >= 2) {
+      const [a, b] = list;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const g = gestureRef.current;
+      if (g && g.type === "pinch" && g.lastDist) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, g.lastDist / dist);
+      gestureRef.current = { type: "pinch", lastDist: dist };
+      panMovedRef.current = true;
+    } else {
+      let g = gestureRef.current;
+      if (!g || g.type !== "pan") { gestureRef.current = { type: "pan", sx: e.clientX, sy: e.clientY, ox: viewRef.current.x, oy: viewRef.current.y }; return; }
       const svg = svgRef.current; if (!svg) return;
       const r = svg.getBoundingClientRect();
       const scale = Math.max(viewRef.current.w / r.width, viewRef.current.h / r.height);
-      if (Math.abs(ev.clientX - pr.sx) + Math.abs(ev.clientY - pr.sy) > 6) panMovedRef.current = true;
-      setView(v => clampView({ ...v, x: pr.ox - (ev.clientX - pr.sx) * scale, y: pr.oy - (ev.clientY - pr.sy) * scale }));
-    };
-    const up = () => { panRef.current = null; window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    window.addEventListener("pointermove", move);
+      if (Math.abs(e.clientX - g.sx) + Math.abs(e.clientY - g.sy) > 6) panMovedRef.current = true;
+      setView(v => clampView({ ...v, x: g.ox - (e.clientX - g.sx) * scale, y: g.oy - (e.clientY - g.sy) * scale }));
+    }
+  };
+  upRef.current = e => {
+    const ptrs = pointersRef.current;
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId);
+    gestureRef.current = ptrs.size === 0 ? null : { type: "reset" };  // re-anchor on next move
+  };
+  useEffect(() => {
+    const mv = e => moveRef.current && moveRef.current(e);
+    const up = e => upRef.current && upRef.current(e);
+    window.addEventListener("pointermove", mv);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
+  }, []);
+  const startPan = e => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.stopPropagation();
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    gestureRef.current = pointersRef.current.size >= 2
+      ? { type: "pinch", lastDist: 0 }
+      : { type: "pan", sx: e.clientX, sy: e.clientY, ox: viewRef.current.x, oy: viewRef.current.y };
   };
   const onBgClick = () => {
     if (panMovedRef.current) { panMovedRef.current = false; return; }
@@ -1134,10 +1172,10 @@ function MapPanel({ state, flows, selected, onSelect, svgRef, dragUI, onStartDra
         <div className="text-xs font-bold tracking-widest text-slate-300">NATIONAL TRANSMISSION MAP</div>
         {drawMode
           ? <div className="text-[10px] text-cyan-300 font-term blink">✏️ click destination region — click sea to cancel</div>
-          : <div className="text-[10px] text-slate-500 font-term">scroll to zoom · drag sea to pan</div>}
+          : <div className="text-[10px] text-slate-500 font-term">pinch / scroll to zoom · drag sea to pan</div>}
       </div>
       <div className="flex-1 min-h-0 relative" onClick={onBgClick}>
-        <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} className="w-full h-full" preserveAspectRatio="xMidYMid meet" style={{ cursor: panRef.current ? "grabbing" : "default" }}>
+        <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`} className="map-svg w-full h-full" preserveAspectRatio="xMidYMid meet" style={{ cursor: "grab" }}>
           <defs>
             <pattern id="gridpat" width="20" height="20" patternUnits="userSpaceOnUse">
               <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#334155" strokeWidth="0.4" />
@@ -1164,10 +1202,10 @@ function MapPanel({ state, flows, selected, onSelect, svgRef, dragUI, onStartDra
           ))}
           {["A", "B", "C", "D"].map(id => <NodeCity key={id} state={state} id={id} />)}
         </svg>
-        <div className="absolute top-2 right-2 flex flex-col gap-1" onClick={e => e.stopPropagation()}>
-          <button onClick={() => zoomCentre(1 / 1.4)} title="Zoom in" className="w-7 h-7 rounded-md bg-slate-800/90 border border-slate-600 hover:bg-slate-700 text-slate-200 font-bold leading-none">+</button>
-          <button onClick={() => zoomCentre(1.4)} title="Zoom out" className="w-7 h-7 rounded-md bg-slate-800/90 border border-slate-600 hover:bg-slate-700 text-slate-200 font-bold leading-none">−</button>
-          <button onClick={() => setView(HOME_VIEW)} title="Reset view" className="w-7 h-7 rounded-md bg-slate-800/90 border border-slate-600 hover:bg-slate-700 text-slate-200 text-[11px] leading-none">⌂</button>
+        <div className="absolute top-2 right-2 flex flex-col gap-1.5" onClick={e => e.stopPropagation()}>
+          <button onClick={() => zoomCentre(1 / 1.4)} title="Zoom in" className="w-9 h-9 sm:w-7 sm:h-7 rounded-md bg-slate-800/90 border border-slate-600 hover:bg-slate-700 active:bg-slate-600 text-slate-200 text-lg sm:text-base font-bold leading-none">+</button>
+          <button onClick={() => zoomCentre(1.4)} title="Zoom out" className="w-9 h-9 sm:w-7 sm:h-7 rounded-md bg-slate-800/90 border border-slate-600 hover:bg-slate-700 active:bg-slate-600 text-slate-200 text-lg sm:text-base font-bold leading-none">−</button>
+          <button onClick={() => setView(HOME_VIEW)} title="Reset view" className="w-9 h-9 sm:w-7 sm:h-7 rounded-md bg-slate-800/90 border border-slate-600 hover:bg-slate-700 active:bg-slate-600 text-slate-200 text-sm leading-none">⌂</button>
         </div>
       </div>
       <div className="px-2 py-1.5 border-t border-slate-700 shrink-0">
@@ -1514,7 +1552,7 @@ function Console({ state, dispatch }) {
   useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [state.log.length]);
   const busy = state.phase !== "play";
   return (
-    <div className="shrink-0 bg-[#0f172a] border border-slate-700 rounded-xl flex items-stretch gap-0 overflow-hidden" style={{ height: "138px" }}>
+    <div className="shrink-0 bg-[#0f172a] border border-slate-700 rounded-xl flex items-stretch gap-0 overflow-hidden h-full lg:h-[138px]">
       <div className="flex-1 min-w-0 flex flex-col">
         <div className="px-3 py-1 border-b border-slate-800 text-[10px] font-bold tracking-widest text-slate-500 flex justify-between">
           <span>📡 WESTMINSTER WIRE — LIVE</span>
@@ -1531,7 +1569,7 @@ function Console({ state, dispatch }) {
       <button
         onClick={() => dispatch({ type: "advance" })}
         disabled={busy}
-        className="w-44 shrink-0 m-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 font-bold text-sm tracking-wide transition flex flex-col items-center justify-center gap-1">
+        className="w-32 sm:w-44 shrink-0 m-2 rounded-lg bg-green-600 hover:bg-green-500 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 font-bold text-sm tracking-wide transition flex flex-col items-center justify-center gap-1">
         <span className="text-2xl">⏭</span>
         <span>ADVANCE<br />FINANCIAL YEAR</span>
         <span className="font-term text-[10px] opacity-80">FY{state.year} → {state.year >= 12 ? "FINAL AUDIT" : `FY${state.year + 1}`}</span>
@@ -1560,8 +1598,8 @@ function Toasts({ toasts }) {
 function ModalShell({ children, tone }) {
   const border = tone === "bad" ? "border-red-600" : tone === "good" ? "border-green-600" : "border-amber-500";
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
-      <div className={`slide-up w-full max-w-lg bg-[#1e293b] border-2 ${border} rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto`}>
+    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-3 sm:p-4">
+      <div className={`slide-up w-full max-w-lg bg-[#1e293b] border-2 ${border} rounded-2xl p-4 sm:p-6 shadow-2xl max-h-[88dvh] overflow-y-auto`}>
         {children}
       </div>
     </div>
@@ -1659,21 +1697,22 @@ function IntroModal({ dispatch }) {
   return (
     <ModalShell tone="good">
       <div className="text-[10px] font-bold tracking-widest text-green-400 mb-1">CLASSIFIED — CHAIR'S EYES ONLY</div>
-      <h2 className="text-2xl font-bold text-slate-100 mb-2">GridLock: The Great British Upgrade</h2>
-      <div className="text-[13px] text-slate-300 space-y-2 leading-relaxed mb-4">
+      <h2 className="text-xl sm:text-2xl font-bold text-slate-100 mb-2">GridLock: The Great British Upgrade</h2>
+      <div className="text-[12px] sm:text-[13px] text-slate-300 space-y-2 leading-relaxed mb-4">
         <p>Welcome to NESO, Chair. The problem in one sentence: <span className="text-green-400">the wind is in Scotland, the demand is in London, and the wires in between are forty years old.</span></p>
         <p>You have <b className="text-green-400">12 financial years</b> and <b className="text-green-400">£3,000m</b> to reach 100% Net Zero while demand nearly doubles.</p>
         <ul className="text-[12px] text-slate-400 list-disc pl-5 space-y-1">
           <li><b className="text-cyan-300">DRAG &amp; DROP</b> assets from the Build Palette onto regions — or cables onto the lines between them.</li>
-          <li><b className="text-cyan-300">✏️ DRAW</b> brand-new transmission corridors: drop the pencil on a region, then click the destination.</li>
+          <li><b className="text-cyan-300">✏️ DRAW</b> brand-new transmission corridors: drop the pencil on a region, then tap the destination.</li>
           <li><b className="text-slate-300">Watch the lines</b>: pulsing red means you're burning money on curtailed wind.</li>
           <li><b className="text-slate-300">Listen to Sir Reginald</b> — the advisor bar tells you what's about to go wrong.</li>
           <li><b className="text-cyan-300">🧪 The Skunkworks</b> holds the mad stuff: fusion bets, stratospheric kites, nuclear barges, hamsters.</li>
+          <li><b className="text-amber-300">📱 On a phone:</b> use the bottom tabs (Map · Build · Wire · Advance); pinch to zoom the map.</li>
           <li>Lose if the Treasury hits zero, Rebellion hits 100%, or the lights go out.</li>
         </ul>
       </div>
       <button onClick={() => dispatch({ type: "begin" })}
-        className="w-full py-3 rounded-lg bg-green-600 hover:bg-green-500 text-slate-900 font-bold transition">
+        className="w-full py-3.5 rounded-lg bg-green-600 hover:bg-green-500 active:bg-green-500 text-slate-900 font-bold transition">
         ⚡ TAKE THE CHAIR
       </button>
     </ModalShell>
@@ -1718,6 +1757,7 @@ function App() {
   const [shaking, setShaking] = useState(false);
   const [dragUI, setDragUI] = useState(null);
   const [drawMode, setDrawMode] = useState(null);
+  const [mobilePane, setMobilePane] = useState("map");   // map | build | wire (small screens only)
 
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -1906,6 +1946,7 @@ function App() {
           break;
         }
         setSelected(action.sel);
+        if (action.sel) setMobilePane("build");   // surface the context menu on phones
         break;
       case "build": {
         const t = ASSET_TYPES[action.assetId];
@@ -2099,18 +2140,48 @@ function App() {
     }
   }
 
+  const advisorTone = advise(state, flows).tone;
+  const busy = state.phase !== "play";
+  const NavBtn = ({ id, icon, label, badge }) => (
+    <button onClick={() => setMobilePane(id)}
+      className={`relative flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-lg transition ${mobilePane === id ? "bg-slate-700 text-slate-100" : "text-slate-400 active:bg-slate-800"}`}>
+      <span className="text-lg leading-none">{icon}</span>
+      <span className="text-[10px] font-bold tracking-wide">{label}</span>
+      {badge && <span className="absolute top-1 right-3 w-2 h-2 rounded-full bg-amber-400 blink" />}
+    </button>
+  );
+
   return (
-    <div className={`h-screen w-screen flex flex-col bg-[#0f172a] text-slate-100 overflow-hidden ${shaking ? "shake" : ""}`}>
+    <div className={`h-app w-screen flex flex-col bg-[#0f172a] text-slate-100 overflow-hidden ${shaking ? "shake" : ""}`}>
       <Header s={state} muted={muted} onToggleMute={() => setMuted(m => !m)} />
-      <main className="flex-1 min-h-0 p-3 pb-0 grid grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] gap-3">
-        <MapPanel state={state} flows={flows} selected={selected} onSelect={sel => dispatch({ type: "select", sel })}
-                  svgRef={svgRef} dragUI={dragUI} onStartDrag={startDrag} drawMode={drawMode} rubberRef={rubberRef} />
-        <RightPanel state={state} flows={flows} selected={selected} tab={tab} setTab={setTab} dispatch={dispatch} />
-      </main>
-      <div className="px-3 pb-3 pt-2">
-        <AdvisorBar state={state} flows={flows} />
-        <Console state={state} dispatch={dispatch} />
+      <div className="flex-1 min-h-0 flex flex-col p-2 lg:p-3 lg:pb-0 gap-2 lg:gap-3">
+        {/* map + command: 2-up on desktop, swappable panes on mobile */}
+        <div className={`${mobilePane === "wire" ? "hidden" : "flex-1"} min-h-0 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:gap-3 lg:flex-1`}>
+          <div className={`${mobilePane === "map" ? "flex" : "hidden"} lg:flex h-full min-h-0`}>
+            <MapPanel state={state} flows={flows} selected={selected} onSelect={sel => dispatch({ type: "select", sel })}
+                      svgRef={svgRef} dragUI={dragUI} onStartDrag={startDrag} drawMode={drawMode} rubberRef={rubberRef} />
+          </div>
+          <div className={`${mobilePane === "build" ? "flex" : "hidden"} lg:flex h-full min-h-0`}>
+            <RightPanel state={state} flows={flows} selected={selected} tab={tab} setTab={setTab} dispatch={dispatch} />
+          </div>
+        </div>
+        {/* westminster wire: always below on desktop, its own pane on mobile */}
+        <div className={`${mobilePane === "wire" ? "flex flex-1 min-h-0" : "hidden"} flex-col lg:flex lg:flex-none`}>
+          <AdvisorBar state={state} flows={flows} />
+          <Console state={state} dispatch={dispatch} />
+        </div>
       </div>
+      {/* mobile bottom navigation */}
+      <nav className="lg:hidden shrink-0 flex items-stretch gap-1.5 px-2 py-1.5 bg-[#1e293b] border-t border-slate-700" style={{ paddingBottom: "calc(0.375rem + env(safe-area-inset-bottom))" }}>
+        <NavBtn id="map" icon="🗺️" label="MAP" />
+        <NavBtn id="build" icon="🏗️" label="BUILD" badge={!!selected} />
+        <NavBtn id="wire" icon="📡" label="WIRE" badge={advisorTone === "bad" || advisorTone === "warn"} />
+        <button onClick={() => dispatch({ type: "advance" })} disabled={busy}
+          className="flex-[1.4] flex flex-col items-center justify-center rounded-lg bg-green-600 active:bg-green-500 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 font-bold transition">
+          <span className="text-base leading-none">⏭ ADVANCE</span>
+          <span className="text-[10px] font-term opacity-80">{state.year >= 12 ? "FINAL AUDIT" : `FY${state.year} → ${state.year + 1}`}</span>
+        </button>
+      </nav>
       <Toasts toasts={toasts} />
       <DragGhost ghostRef={ghostRef} dragUI={dragUI} />
       {state.phase === "intro" && <IntroModal dispatch={dispatch} />}
