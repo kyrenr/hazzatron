@@ -315,7 +315,7 @@ const CRISIS_DECK = [
     id: "dunkelflaute", icon: "🌫️", title: "The Dunkelflaute",
     body: (s) => `A three-week anticyclonic gloom settles over the North Sea. Wind output will collapse to ~5% this year (strato-kites excepted). Your firm cover (nuclear + batteries + imports + gas fleet) is ${r1(firmCoverGW(s))} GW against ~${r1(demandForYear(s.year, s.demandExtra) + s.demandExtraD)} GW of demand.`,
     choices: [
-      { label: "Buy emergency foreign gas (LNG)", detail: "−£500m, charter whatever it takes — the lights are guaranteed to stay on", fx: "lng", can: s => s.treasury >= 500 },
+      { label: "Buy emergency foreign gas (LNG)", detail: "−£350m, charter whatever it takes — the lights are guaranteed to stay on", fx: "lng", can: s => s.treasury >= 350 },
       { label: "Trust the system, ride it out", detail: "Free. If firm cover falls short… brownouts, or worse", fx: "rideOut" },
     ],
   },
@@ -630,12 +630,13 @@ function applyCrisisChoice(state, fx) {
       L("bad", "PYLON REVOLT: overhead lines forced through. +18% Rebellion, −4 Approval. Queued pylon upgrades deliver 1 year early. Effigies in three constituencies.");
       break;
     case "lng":
-      s.treasury -= 500; mods.windOverride = 0.05; mods.tempFleet = 60; // whatever it takes
-      L("warn", "DUNKELFLAUTE: £500m of emergency LNG chartered — every spare tanker in the Atlantic. The lights stay on; the Treasury does not smile.");
+      s.treasury -= 350; mods.windOverride = 0.05; mods.tempFleet = 60;
+      L("warn", "DUNKELFLAUTE: £350m of emergency LNG chartered. Every tanker in the Atlantic redirected. Expensive, but the lights stay on; the Treasury does not smile.");
       break;
     case "rideOut":
-      mods.windOverride = 0.05;
-      L("bad", "DUNKELFLAUTE: no bailout purchased. Wind output collapses to 5%. Praying to the firm-capacity gods.");
+      mods.windOverride = 0.05; mods.tempDemand = 4;
+      s.approval = clamp(s.approval - 5, 0, 100); s.rebellion = clamp(s.rebellion + 8, 0, 100);
+      L("bad", "DUNKELFLAUTE: no bailout purchased. Wind at 5% AND the cold snap is adding 4 GW of heating load. Every GW of nuclear and batteries you built is being tested. −5 Approval, +8% Rebellion from a nervous public.");
       break;
     case "dcApprove":
       s.treasury += 250; s.pc = clamp(s.pc + 5, 0, 100); s.demandExtraD += 2;
@@ -808,9 +809,11 @@ function resolveYear(prev, mods) {
 
   /* 4 — physics */
   const f = computeFlows(s, windCF, solarCF);
+  const tempDemandExtra = mods.tempDemand || 0;  // e.g. heating spike during Dunkelflaute
   const fleetAvail = s.gasFleet + (mods.tempFleet || 0);
-  const gasFired = Math.min(f.gasNeeded, fleetAvail);
-  const unserved = f.gasNeeded - gasFired;
+  const extraGasNeeded = f.gasNeeded + tempDemandExtra;
+  const gasFired = Math.min(extraGasNeeded, fleetAvail);
+  const unserved = extraGasNeeded - gasFired;
 
   /* 5 — money */
   const income = ECON.baseIncome + (prev.year - 1) * 30 + (s.policies.carbonLevy ? 300 : 0)
@@ -830,8 +833,9 @@ function resolveYear(prev, mods) {
   s.stats.peakPrice = Math.max(s.stats.peakPrice, s.price);
 
   /* 7 — net zero + intermittency */
-  s.netZero = r1(clamp((1 - gasFired / f.demand) * 100, 0, 100));
-  s.intermittency = r1(intermittencyRisk(s, f.demand));
+  const effectiveDemand = f.demand + tempDemandExtra;
+  s.netZero = r1(clamp((1 - gasFired / effectiveDemand) * 100, 0, 100));
+  s.intermittency = r1(intermittencyRisk(s, effectiveDemand));
   s.netZeroHistory = [...(prev.netZeroHistory || []).slice(-11), s.netZero];
 
   /* 8 — public mood */
@@ -1408,9 +1412,51 @@ function DefaultTab({ state, flows, dispatch }) {
         <div className="mt-2">
           <div className="flex justify-between text-[10px] text-slate-400 mb-1">
             <span>GRID INTERMITTENCY RISK</span>
-            <span className={state.intermittency > 40 ? "text-red-400 font-bold" : "text-slate-300"}>{state.intermittency}% {state.intermittency > 40 ? "⚠ UNSTABLE" : "(instability above 40%)"}</span>
+            <span className={state.intermittency > 40 ? "text-red-400 font-bold" : state.intermittency > 20 ? "text-amber-400" : "text-green-400"}>{state.intermittency}% {state.intermittency > 40 ? "⚠ UNSTABLE" : state.intermittency > 20 ? "ELEVATED" : "STABLE"}</span>
           </div>
           <Bar value={state.intermittency} max={60} color={state.intermittency > 40 ? "bg-red-500" : state.intermittency > 25 ? "bg-amber-400" : "bg-green-500"} />
+          <div className="mt-1.5 space-y-1">
+            {(() => {
+              const t = totalsByKind(state);
+              const variableGW = r1(t.wind + t.solar);
+              const firmGW = r1(t.nuclear + t.battery * ECON.batteryFirmFactor + state.firmImports);
+              // per-node: wind+solar capacity minus nuclear and battery firm
+              const nodeScore = {};
+              for (const id of ["A","B","C","D"]) {
+                const g = flows.g[id];
+                nodeScore[id] = g.windCap + g.solarCap - g.nuclear - g.battery * ECON.batteryFirmFactor;
+              }
+              const bestNode = Object.entries(nodeScore).sort((a,b) => b[1]-a[1])[0];
+              const satLink = Object.keys(state.links).find(id => {
+                const cap = state.links[id] ? state.links[id].cap : 0;
+                return cap > 0 && (flows.byLink[id] || 0) / cap >= 0.99;
+              });
+              return (
+                <>
+                  <div className="text-[10px] text-slate-500">
+                    Variable (wind+solar): <span className="text-amber-400 font-term">{variableGW} GW</span> | Firm (nuclear+batteries×50%+imports): <span className="text-green-400 font-term">{firmGW} GW</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 italic">Intermittency rises when variable far exceeds firm. A Dunkelflaute (wind lull) can leave a variable-heavy grid dangerously short.</div>
+                  {state.intermittency > 15 && bestNode && bestNode[1] > 0.5 && (
+                    <div className="text-[10px] text-amber-300 bg-amber-950/30 border border-amber-800/50 rounded px-2 py-1">
+                      ⚡ Best fix: add a 🔋 Battery at <b>{NODE_DEFS[bestNode[0]].short}</b> — it has {fmtGW(r1(bestNode[1]))} more variable than firm generation. Each 2 GW battery firms up 1 GW of that gap.
+                    </div>
+                  )}
+                  {satLink && (
+                    <div className="text-[10px] text-red-300 bg-red-950/30 border border-red-800/50 rounded px-2 py-1">
+                      🔌 A battery at {NODE_DEFS[LINK_DEFS[satLink].from].short} also reduces curtailment on the saturated {LINK_DEFS[satLink].name} line.
+                    </div>
+                  )}
+                  {t.nuclear < 3 && (
+                    <div className="text-[10px] text-purple-300 bg-purple-950/30 border border-purple-800/50 rounded px-2 py-1">
+                      ⚛️ Low nuclear ({fmtGW(r1(t.nuclear))}). SMR nuclear at any node gives firm 24/7 baseload — the most powerful way to cut intermittency.
+                    </div>
+                  )}
+                  {state.intermittency <= 15 && <div className="text-[10px] text-green-400">✓ Firm cover looks healthy. Keep building if demand is still rising.</div>}
+                </>
+              );
+            })()}
+          </div>
         </div>
         <div className="mt-2">
           <div className="flex justify-between text-[10px] text-slate-400 mb-1">
@@ -1927,7 +1973,7 @@ function App() {
   const [shaking, setShaking] = useState(false);
   const [dragUI, setDragUI] = useState(null);
   const [drawMode, setDrawMode] = useState(null);
-  const [mobilePane, setMobilePane] = useState("map");   // map | build | wire (small screens only)
+  const [mobilePane, setMobilePane] = useState("map");   // map | build | national (small screens only)
 
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
@@ -2338,17 +2384,48 @@ function App() {
       <Header s={state} muted={muted} onToggleMute={() => setMuted(m => !m)} />
       <div className="flex-1 min-h-0 flex flex-col p-2 lg:p-3 lg:pb-0 gap-2 lg:gap-3">
         {/* map + command: 2-up on desktop, swappable panes on mobile */}
-        <div className={`${mobilePane === "wire" ? "hidden" : "flex-1"} min-h-0 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:gap-3 lg:flex-1`}>
+        <div className={`${mobilePane === "national" ? "hidden" : "flex-1"} min-h-0 lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:gap-3 lg:flex-1`}>
           <div className={`${mobilePane === "map" ? "flex" : "hidden"} lg:flex h-full min-h-0`}>
             <MapPanel state={state} flows={flows} selected={selected} onSelect={sel => dispatch({ type: "select", sel })}
                       svgRef={svgRef} dragUI={dragUI} onStartDrag={startDrag} drawMode={drawMode} rubberRef={rubberRef} />
           </div>
-          <div className={`${mobilePane === "build" ? "flex" : "hidden"} lg:flex h-full min-h-0`}>
+          {/* Mobile BUILD pane: node/link detail when selected, Skunkworks otherwise */}
+          <div className={`${mobilePane === "build" ? "flex" : "hidden"} lg:hidden h-full min-h-0 w-full`}>
+            <div className="h-full w-full flex flex-col bg-[#1e293b] rounded-xl border border-slate-700 overflow-hidden">
+              <div className="px-3 py-2 border-b border-slate-700 shrink-0 flex items-center justify-between">
+                <div className="text-xs font-bold tracking-widest text-slate-300">
+                  {selected ? (selected.type === "node" ? `NODE ${selected.id} — ${NODE_DEFS[selected.id].short}` : LINK_DEFS[selected.id].name.toUpperCase()) : "🧪 SKUNKWORKS LAB"}
+                </div>
+                {selected && <button onClick={() => dispatch({ type: "select", sel: null })} className="text-[10px] text-sky-400 hover:text-sky-300">← back</button>}
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto p-3">
+                {selected && selected.type === "node" && <NodeTab state={state} flows={flows} nodeId={selected.id} dispatch={dispatch} />}
+                {selected && selected.type === "link" && <LinkTab state={state} flows={flows} linkId={selected.id} dispatch={dispatch} />}
+                {!selected && (
+                  <>
+                    <div className="text-[10px] text-slate-500 italic mb-3 px-1">Tap a region or line on the map to build and upgrade. While you're here, launch some science.</div>
+                    <LabTab state={state} dispatch={dispatch} />
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          {/* Desktop right panel (national+lab+node tabs) */}
+          <div className="hidden lg:flex h-full min-h-0">
             <RightPanel state={state} flows={flows} selected={selected} tab={tab} setTab={setTab} dispatch={dispatch} />
           </div>
         </div>
-        {/* westminster wire: always below on desktop, its own pane on mobile */}
-        <div className={`${mobilePane === "wire" ? "flex flex-1 min-h-0" : "hidden"} flex-col lg:flex lg:flex-none`}>
+        {/* NATIONAL pane (mobile only) — national dashboard + advisor, replaces wire/news reel */}
+        <div className={`${mobilePane === "national" ? "flex flex-1 min-h-0" : "hidden"} lg:hidden flex-col gap-2`}>
+          <AdvisorBar state={state} flows={flows} />
+          <div className="flex-1 min-h-0 bg-[#1e293b] rounded-xl border border-slate-700 overflow-y-auto">
+            <div className="p-3">
+              <DefaultTab state={state} flows={flows} dispatch={dispatch} />
+            </div>
+          </div>
+        </div>
+        {/* Westminster Wire + Advance: desktop only (hidden on mobile) */}
+        <div className="hidden lg:flex lg:flex-none flex-col">
           <AdvisorBar state={state} flows={flows} />
           <Console state={state} dispatch={dispatch} />
         </div>
@@ -2357,7 +2434,7 @@ function App() {
       <nav className="lg:hidden shrink-0 flex items-stretch gap-1.5 px-2 py-1.5 bg-[#1e293b] border-t border-slate-700" style={{ paddingBottom: "calc(0.375rem + env(safe-area-inset-bottom))" }}>
         <NavBtn id="map" icon="🗺️" label="MAP" />
         <NavBtn id="build" icon="🏗️" label="BUILD" badge={!!selected} />
-        <NavBtn id="wire" icon="📡" label="WIRE" badge={advisorTone === "bad" || advisorTone === "warn"} />
+        <NavBtn id="national" icon="📊" label="NATIONAL" badge={advisorTone === "bad" || advisorTone === "warn"} />
         <button onClick={() => dispatch({ type: "advance" })} disabled={busy}
           className="flex-[1.4] flex flex-col items-center justify-center rounded-lg bg-green-600 active:bg-green-500 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 font-bold transition">
           <span className="text-base leading-none">⏭ ADVANCE</span>

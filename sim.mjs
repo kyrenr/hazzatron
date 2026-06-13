@@ -113,7 +113,7 @@ function innovate(S, id) {
 
 /* ----------------------------- the strategy ----------------------------- */
 const flowsOf = S => G.computeFlows(S, 0.9, 0.9);
-const RESERVE = 250; // keep this much treasury in reserve when building
+const RESERVE = 280; // keep this much treasury in reserve when building
 
 function chooseCrisis(S, card) {
   const playable = card.choices.filter(c => (c.can ? c.can(S) : true));
@@ -122,7 +122,12 @@ function chooseCrisis(S, card) {
   let fx = null;
   switch (card.id) {
     case "pylonRevolt": fx = (S.rebellion > 50 && S.treasury > 900) ? pick("pylonYield") : pick("pylonForce"); break;
-    case "dunkelflaute": fx = (G.firmCoverGW(S) < G.demandForYear(S.year, S.demandExtra) + S.demandExtraD - 1) ? pick("lng") : pick("rideOut"); break;
+    // Buy LNG (£350m) if affordable; only ride out when firm cover massively exceeds demand+4 GW spike
+    case "dunkelflaute": {
+      const firm = G.firmCoverGW(S);
+      const d = G.demandForYear(S.year, S.demandExtra) + S.demandExtraD;
+      fx = firm >= d + 4 + 8 ? pick("rideOut") : (pick("lng") || pick("rideOut")); break;
+    }
     case "dataCentre": fx = S.year <= 5 ? pick("dcApprove") : pick("dcBlock"); break;
     case "interconnector": fx = S.treasury > 1300 ? pick("viking") : pick("none"); break;
     case "gasShock": fx = (S.treasury > 900 && S.approval < 55) ? pick("gasSubsidise") : pick("gasHold"); break;
