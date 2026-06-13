@@ -217,8 +217,8 @@ const ECON = {
   baseIncome: 650, gasFleetStart: 34, gasFuelCostPerGW: 9, curtailFinePerGW: 40,
   priceBase: 3.5, pricePerGasGW: 0.19, pricePerCurtailGW: 0.12, levyPriceAdd: 1.2,
   batteryFirmFactor: 0.5, queueDelayDefault: 4, queueDelayReformed: 1,
-  brownoutTolerance: 2.5, demandStart: 35, demandEnd: 65, totalYears: 12,
-  pcRegen: 5, nimbyDecay: 6,
+  brownoutTolerance: 4, demandStart: 35, demandEnd: 65, totalYears: 12,
+  pcRegen: 6, nimbyDecay: 6,
 };
 
 const demandForYear = (year, extra) =>
@@ -413,6 +413,7 @@ const CRISIS_DECK = [
     choices: [
       { label: "Accept the annual tariff (−£200m/yr)", detail: "Grid integrity guaranteed. The Chancellor will not forgive you.", fx: "scotTariffAccept", can: s => s.treasury >= 200 },
       { label: "Build the Queensferry Counter-Offer", detail: "−£800m, +2 GW on Scotland→Midlands permanently. No tariff. Bold.", fx: "scotBuild", can: s => s.treasury >= 800 },
+      { label: "Refuse and call their bluff", detail: "Free. +8% Rebellion, −3 Approval. Holyrood fumes; the lights stay on.", fx: "scotRefuse" },
     ],
   },
   {
@@ -614,6 +615,10 @@ function applyCrisisChoice(state, fx) {
 
   switch (fx) {
     case "none": L("info", "MINISTERIAL BOX: no action taken. The red box closes with a satisfying thunk."); break;
+    case "broke":
+      s.approval = clamp(s.approval - 4, 0, 100); s.rebellion = clamp(s.rebellion + 4, 0, 100);
+      L("warn", "TREASURY STRETCHED: no funds for a grand gesture. The crisis is weathered on a wing and a prayer. −4 Approval, +4% Rebellion.");
+      break;
     case "pylonYield":
       s.treasury -= 400; s.approval = clamp(s.approval + 6, 0, 100); s.stats.underground++;
       s.linkQueue.forEach(q => q.turnsLeft += 1);
@@ -730,6 +735,10 @@ function applyCrisisChoice(state, fx) {
       s.links.L1.cap += 2;
       L("good", "QUEENSFERRY COUNTER: £800m investment, +2 GW on Scotland→Midlands permanently. Edinburgh and London simultaneously issue identical press releases claiming full credit.");
       break;
+    case "scotRefuse":
+      s.rebellion = clamp(s.rebellion + 8, 0, 100); s.approval = clamp(s.approval - 3, 0, 100);
+      L("warn", "SCOTTISH STAND-OFF: tariff refused. Holyrood threatens a Section 30 strop. +8% Rebellion, −3 Approval. No money changes hands.");
+      break;
     case "evSurgeLng":
       s.treasury -= 200; mods.tempFleet = 8;
       L("info", "EV SURGE: £200m emergency balancing deployed. The nation charges its cars in peace. The grid holds. The Treasury does not smile.");
@@ -827,32 +836,38 @@ function resolveYear(prev, mods) {
 
   /* 8 — public mood */
   let dApproval = 0, dRebellion = 0;
-  if (s.price > 18) { dApproval -= 8; dRebellion += 8; L("bad", `BILLS CRISIS: wholesale at ${fmtP(s.price)}. Marginal gas is setting the price of everything. The public is furious.`); }
-  else if (s.price > 14) { dApproval -= 4; dRebellion += 4; L("warn", `PRICE PRESSURE: wholesale at ${fmtP(s.price)} — gas on the margin keeps bills high.`); }
+  if (s.price > 18) { dApproval -= 8; dRebellion += 6; L("bad", `BILLS CRISIS: wholesale at ${fmtP(s.price)}. Marginal gas is setting the price of everything. The public is furious.`); }
+  else if (s.price > 14) { dApproval -= 4; dRebellion += 3; L("warn", `PRICE PRESSURE: wholesale at ${fmtP(s.price)} — gas on the margin keeps bills high.`); }
   else if (s.price < 10) { dApproval += 3; }
-  if (s.intermittency > 40) { dApproval -= 6; dRebellion += 6; L("bad", `GRID INSTABILITY: intermittency risk at ${s.intermittency}%. Frequency excursions reported. Build firm capacity (nuclear / batteries).`); }
-  if (s.approval + dApproval < 30) dRebellion += 6;
+  if (s.intermittency > 40) { dApproval -= 6; dRebellion += 4; L("bad", `GRID INSTABILITY: intermittency risk at ${s.intermittency}%. Frequency excursions reported. Build firm capacity (nuclear / batteries).`); }
+  if (s.approval + dApproval < 30) dRebellion += 5;
 
   for (const id of ["A", "B", "C", "D"]) {
-    if (s.nimby[id] > 70) { dRebellion += 3; L("warn", `NIMBY FLASHPOINT: opposition in ${NODE_DEFS[id].short} at ${Math.round(s.nimby[id])}%. Local MPs are tabling motions.`); }
+    if (s.nimby[id] > 70) { dRebellion += 2; L("warn", `NIMBY FLASHPOINT: opposition in ${NODE_DEFS[id].short} at ${Math.round(s.nimby[id])}%. Local MPs are tabling motions.`); }
     s.nimby[id] = clamp(s.nimby[id] - ECON.nimbyDecay * (s.nimbyDecayMult || 1), 0, 100);
   }
-  if (dRebellion === 0 && f.curtailed < 0.05 && unserved <= 0) {
-    dRebellion = -5; L("good", "QUIET YEAR ON THE BENCHES: competence breeds calm. Rebellion Risk −5%.");
+  /* the benches always cool slightly between flashpoints */
+  dRebellion -= 3;
+  if (dRebellion <= -3 && f.curtailed < 0.05 && unserved <= 0) {
+    dRebellion -= 4; L("good", "QUIET YEAR ON THE BENCHES: competence breeds calm. Rebellion Risk easing.");
   }
-  if (s.approval + dApproval >= 55) {
-    dRebellion -= 2; // a popular chairman is a safe chairman
+  if (s.approval + dApproval >= 50) {
+    dRebellion -= 3; // a popular chairman is a safe chairman
   }
   s.approval = clamp(s.approval + dApproval, 0, 100);
   s.rebellion = clamp(s.rebellion + dRebellion, 0, 100);
   s.pc = clamp(s.pc + ECON.pcRegen, 0, 100);
 
-  /* 9 — supply security outcomes */
-  if (unserved > ECON.brownoutTolerance) {
-    s.gameOver = { type: "blackout", detail: `Unserved demand hit ${fmtGW(unserved)}. The grid frequency collapsed at 17:42 on a Tuesday in January.` };
+  /* 9 — supply security outcomes
+     blackout tolerance scales with demand: a fixed margin would doom any large
+     grid late-game. Below the blackout threshold, shortfalls are survivable
+     brownouts (a penalty and a warning) rather than instant game-over. */
+  const blackoutTol = Math.max(ECON.brownoutTolerance, f.demand * 0.12);
+  if (unserved > blackoutTol) {
+    s.gameOver = { type: "blackout", detail: `Unserved demand hit ${fmtGW(unserved)} (tolerance ${fmtGW(blackoutTol)}). The grid frequency collapsed at 17:42 on a Tuesday in January.` };
   } else if (unserved > 0) {
-    s.treasury -= 250; s.rebellion = clamp(s.rebellion + 10, 0, 100); s.approval = clamp(s.approval - 10, 0, 100); s.stats.brownouts++;
-    L("bad", `ROLLING BROWNOUTS: ${fmtGW(unserved)} short. Emergency demand control invoked. −£250m, Rebellion +10%, Approval −10.`);
+    s.treasury -= 200; s.rebellion = clamp(s.rebellion + 6, 0, 100); s.approval = clamp(s.approval - 7, 0, 100); s.stats.brownouts++;
+    L("bad", `ROLLING BROWNOUTS: ${fmtGW(unserved)} short (blackout above ${fmtGW(blackoutTol)}). Emergency demand control invoked. −£200m, Rebellion +6%, Approval −7.`);
   }
 
   /* 10 — carbon levy retires gas fleet */
@@ -1725,6 +1740,7 @@ function ModalShell({ children, tone }) {
 function CrisisModal({ state, dispatch }) {
   const card = state.activeCrisis;
   if (!card) return null;
+  const anyPlayable = card.choices.some(c => (c.can ? c.can(state) : true));
   return (
     <ModalShell tone="warn">
       <div className="text-[10px] font-bold tracking-widest text-amber-400 mb-1">⚠ WESTMINSTER CRISIS — FY{state.year} — A DECISION IS REQUIRED</div>
@@ -1742,6 +1758,13 @@ function CrisisModal({ state, dispatch }) {
             </button>
           );
         })}
+        {!anyPlayable && (
+          <button onClick={() => dispatch({ type: "crisisChoice", fx: "broke" })}
+            className="w-full text-left px-4 py-3 rounded-lg border border-amber-600 bg-amber-950/30 hover:bg-amber-900/40 transition">
+            <div className="text-sm font-bold text-amber-300">⚠ Plead poverty — the Treasury cannot act</div>
+            <div className="text-[11px] text-amber-400/80">You can afford none of the above. Stall for a year. −4 Approval, +4% Rebellion — but the game goes on.</div>
+          </button>
+        )}
       </div>
     </ModalShell>
   );
