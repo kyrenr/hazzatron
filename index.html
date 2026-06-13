@@ -181,6 +181,10 @@ const POLICIES = [
     desc: "A bypass here, a leisure centre there, a knighthood somewhere ambiguous. Rebellion −12%, Approval +4, all NIMBY −10. −£350m." },
   { id: "reshuffle", icon: "🔪", name: "Night of the Long Knives", pc: 20, cost: 0, doneLabel: "MALCONTENTS PURGED",
     desc: "Reshuffle the ringleaders into the Department for Paperclips. Rebellion −25% instantly, Approval −3. One use only. −20 PC." },
+  { id: "heatPumpMandate", icon: "♨️", name: "Mandate Heat Pumps (2031 Sprint)", pc: 15, cost: 0, doneLabel: "HEAT PUMP MANDATE ACTIVE — demand +3 GW, green rebate +£150m/yr", minYear: 7,
+    desc: "Accelerate the 2031 switchover. National demand +3 GW permanently (evening peak) — but a green infrastructure rebate adds +£150m/yr income. +4 Approval, −15 PC. Unlocks Year 7." },
+  { id: "dsr", icon: "📊", name: "National Demand-Side Response", pc: 10, cost: 450, doneLabel: "DSR LIVE — peak demand −3 GW", minYear: 7,
+    desc: "Aggregate industrial demand curtailment at the national scale. Peak demand −3 GW, forever. −£450m, −10 PC. Unlocks Year 7." },
 ];
 
 const ASSET_TYPES = {
@@ -304,7 +308,7 @@ const CRISIS_DECK = [
     body: () => "Forty backbenchers, three peers and one furious celebrity gardener demand you underground the East Anglian pylon route. The Daily Mail has a helicopter over the marshes.",
     choices: [
       { label: "Yield — underground the route", detail: "−£400m, every queued link upgrade delayed +1 yr, +6 Approval", fx: "pylonYield", can: s => s.treasury >= 400 },
-      { label: "Force the overhead lines through", detail: "Free. +18% Rebellion Risk, −4 Approval", fx: "pylonForce" },
+      { label: "Force the overhead lines through", detail: "+18% Rebellion Risk, −4 Approval — but every queued pylon upgrade delivers 1 year early.", fx: "pylonForce" },
     ],
   },
   {
@@ -395,6 +399,30 @@ const CRISIS_DECK = [
       { label: "Ask for a delay", detail: "−6 PC, −4 Approval (the green lobby is incandescent)", fx: "evDelay" },
     ],
   },
+  {
+    id: "doggerBreak", icon: "⚡", title: "Dogger Bank Cable Break",
+    body: () => "A survey vessel has snagged the East Anglia subsea link. L2 is derated until emergency repairs complete. The operator quotes six months; your engineers are considerably less optimistic.",
+    choices: [
+      { label: "Emergency repair contract", detail: "−£300m. L2 fully restored next year. The cable-layers earn their Christmas bonus.", fx: "doggerFix", can: s => s.treasury >= 300 },
+      { label: "Accept the derating — reroute flows", detail: "Free. L2 loses 2 GW. Curtailment fines incoming from Scotland.", fx: "doggerDefer" },
+    ],
+  },
+  {
+    id: "scotGrid", icon: "🏴󠁧󠁢󠁳󠁣󠁴󠁿", title: "Scottish Grid Renegotiation",
+    body: () => "Holyrood is invoking the Transmission Tariff Act. Edinburgh demands a share of cross-border transmission revenue. Two paths forward.",
+    choices: [
+      { label: "Accept the annual tariff (−£200m/yr)", detail: "Grid integrity guaranteed. The Chancellor will not forgive you.", fx: "scotTariffAccept", can: s => s.treasury >= 200 },
+      { label: "Build the Queensferry Counter-Offer", detail: "−£800m, +2 GW on Scotland→Midlands permanently. No tariff. Bold.", fx: "scotBuild", can: s => s.treasury >= 800 },
+    ],
+  },
+  {
+    id: "evSurge", icon: "🔌", title: "The Great EV Night Surge",
+    body: (s) => `An unexpected heatwave has triggered a 4 GW evening charging peak. Your balancing team is on the phone. Current firm cover: ${r1(firmCoverGW(s))} GW against ~${r1(demandForYear(s.year, s.demandExtra) + s.demandExtraD + 4)} GW spiked demand.`,
+    choices: [
+      { label: "Deploy emergency LNG balancing", detail: "−£200m. Surge met in full. The nation charges its cars peacefully.", fx: "evSurgeLng", can: s => s.treasury >= 200 },
+      { label: "Invoke demand curtailment", detail: "Free. −4 Approval, +6% Rebellion. The chargers blink off at 10pm.", fx: "evSurgeCurtail" },
+    ],
+  },
 ];
 
 const shuffle = arr => {
@@ -406,50 +434,86 @@ const shuffle = arr => {
   return a;
 };
 
+/* --------------------------- scenarios --------------------------------- */
+const SCENARIOS = [
+  {
+    id: "default", label: "The Status Quo", icon: "🇬🇧",
+    tagline: "The classic run. Balanced position, 12 years, everything to play for.",
+    desc: "Standard starting conditions. 34 GW gas fleet, £3,000m treasury, four-year connection queue. Demand climbs to 65 GW by Year 12.",
+    mods: {},
+  },
+  {
+    id: "gasLegacy", label: "The Gas Legacy", icon: "🏭",
+    tagline: "Inherited a fleet of CCGTs and a political debt to the gas lobby.",
+    desc: "You start with +15 GW more gas and +£500m in lobbyist-friendly infrastructure, but Net Zero is capped at 18% by legacy contracts. The carbon levy fight will be ugly.",
+    mods: { gasFleet: 15, treasury: 500, startNetZero: 18, startRebellion: 8 },
+  },
+  {
+    id: "renewablesRush", label: "The Renewables Rush", icon: "🌀",
+    tagline: "Scotland is plastered in turbines. The wires can't keep up.",
+    desc: "Scotland already has 10 GW of wind (double the default), but the L1 boundary was never upgraded — it's only 2 GW. You'll haemorrhage curtailment fines until you fix the wires. Treasury starts lower.",
+    mods: { scotlandWind: 5, l1Cap: -2, treasury: -500 },
+  },
+  {
+    id: "dataBoom", label: "The Data Centre Superboom", icon: "🖥️",
+    tagline: "Every AI company in the world wants a UK data centre. Demand goes vertical.",
+    desc: "An AI investment boom adds 15 GW to the national demand forecast (65 → 80 GW by Year 12). You get extra annual income from the economic windfall, but the grid must scale brutally fast.",
+    mods: { demandExtra: 15, baseIncomeBonus: 150, treasury: 500 },
+  },
+];
+
 /* --------------------------- initial state ----------------------------- */
 function makeAsset(type, nodeId, effGW) {
   const t = ASSET_TYPES[type];
   return { uid: uid(), type, nodeId, gw: effGW, kind: t.kind, name: t.name, icon: t.icon };
 }
 
-function initialState() {
+function initialState(scenarioId = "default") {
+  const scenario = SCENARIOS.find(s => s.id === scenarioId) || SCENARIOS[0];
+  const m = scenario.mods;
   const innovations = {};
   for (const i of INNOVATIONS) innovations[i.id] = { status: "idle", turnsLeft: 0 };
+  const startTreasury = ECON.startTreasury + (m.treasury || 0);
+  const startAssets = [
+    makeAsset("onshore",  "A", 5.0 + (m.scotlandWind || 0)),
+    makeAsset("onshore",  "B", 1.0),
+    makeAsset("offshore", "C", 2.0),
+    makeAsset("smr",      "C", 1.2),
+    makeAsset("solar",    "D", 0.5),
+  ];
   return {
+    scenario: scenarioId,
     year: 1, phase: "intro",
-    treasury: ECON.startTreasury, pc: ECON.startPC,
-    rebellion: ECON.startRebellion, approval: 52,
-    price: 8.5, netZero: 25, intermittency: 16,
-    gasFleet: ECON.gasFleetStart, firmImports: 0, firmMult: 2.5,
-    demandExtra: 0, demandExtraD: 0, batteryDiscount: 1,
+    treasury: startTreasury, pc: ECON.startPC,
+    rebellion: ECON.startRebellion + (m.startRebellion || 0), approval: 52,
+    price: 8.5, netZero: m.startNetZero || 25, intermittency: 16,
+    gasFleet: ECON.gasFleetStart + (m.gasFleet || 0), firmImports: 0, firmMult: 2.5,
+    demandExtra: m.demandExtra || 0, demandExtraD: 0, batteryDiscount: 1,
+    baseIncomeBonus: m.baseIncomeBonus || 0,
     costMult: 1, nimbyDecayMult: 1, windNext: 0.92,
-    policies: { queueReform: false, carbonLevy: false, smartTariffs: false, communityFund: false, skillsAcademy: false, strategicReserve: false, porkBarrel: false, reshuffle: false },
+    scotTariff: false,
+    netZeroHistory: [m.startNetZero || 25],
+    policies: { queueReform: false, carbonLevy: false, smartTariffs: false, communityFund: false, skillsAcademy: false, strategicReserve: false, porkBarrel: false, reshuffle: false, heatPumpMandate: false, dsr: false },
     whipsUsed: false,
     nimby: { A: 22, B: 18, C: 30, D: 45 },
-    assets: [
-      makeAsset("onshore",  "A", 5.0),
-      makeAsset("onshore",  "B", 1.0),
-      makeAsset("offshore", "C", 2.0),
-      makeAsset("smr",      "C", 1.2),
-      makeAsset("solar",    "D", 0.5),
-    ],
+    assets: startAssets,
     queue: [
       { uid: "q1", type: "offshore", nodeId: "C", gw: 3.0, turnsLeft: 1, label: "Offshore Wind 3.0 GW" },
       { uid: "q2", type: "onshore",  nodeId: "A", gw: 2.6, turnsLeft: 2, label: "Onshore Wind 2.6 GW" },
       { uid: "q3", type: "battery",  nodeId: "B", gw: 2.0, turnsLeft: 3, label: "Battery Hub 2.0 GW" },
     ],
-    links: { L1: { cap: 4 }, L2: { cap: 6 }, L3: { cap: 8 } },
+    links: { L1: { cap: 4 + (m.l1Cap || 0) }, L2: { cap: 6 }, L3: { cap: 8 } },
     linkQueue: [],
     innovations,
     deck: shuffle(CRISIS_DECK),
     activeCrisis: null,
     log: [
-      { year: 0, tone: "info", text: "SYSTEM ONLINE. Welcome, Chair. The Connections Queue stands at 4 years. The South is hungry. The wind is in the wrong place." },
-      { year: 0, tone: "warn", text: "FORECAST: national demand will climb from 35 GW to 65 GW by Year 12 (EVs, heat pumps, data centres)." },
-      { year: 0, tone: "good", text: "TIP: drag assets from the BUILD PALETTE straight onto the map. Visit the SKUNKWORKS tab when you feel brave." },
+      { year: 0, tone: "info", text: `SYSTEM ONLINE. Welcome, Chair. Scenario: "${scenario.label}". The Connections Queue stands at 4 years. The South is hungry. The wind is in the wrong place.` },
+      { year: 0, tone: "warn", text: `FORECAST: national demand will climb from 35 GW to ${65 + (m.demandExtra || 0)} GW by Year 12 (EVs, heat pumps, data centres${m.demandExtra ? ", AI boom" : ""}).` },
+      { year: 0, tone: "good", text: "TIP: drag assets from the BUILD PALETTE straight onto the map. Visit the SKUNKWORKS tab when you feel brave. Late-game policies unlock at Year 7." },
     ],
     gameOver: null,
-    stats: { fines: 0, curtailed: 0, gasBurned: 0, built: 0, pylons: 0, hvdc: 0, underground: 0, brownouts: 0, peakPrice: 8.5, batteriesGW: 0, innovations: 0, corridors: 0, lowestTreasury: ECON.startTreasury },
+    stats: { fines: 0, curtailed: 0, gasBurned: 0, built: 0, pylons: 0, hvdc: 0, underground: 0, brownouts: 0, peakPrice: 8.5, batteriesGW: 0, innovations: 0, corridors: 0, lowestTreasury: startTreasury },
     lastYear: null,
   };
 }
@@ -557,7 +621,8 @@ function applyCrisisChoice(state, fx) {
       break;
     case "pylonForce":
       s.rebellion = clamp(s.rebellion + 18, 0, 100); s.approval = clamp(s.approval - 4, 0, 100); s.stats.pylons++;
-      L("bad", "PYLON REVOLT: overhead lines forced through. Rebellion Risk +18%. Effigies reported in three constituencies.");
+      s.linkQueue.forEach(q => { if (q.label && q.label.toLowerCase().includes("pylon")) q.turnsLeft = Math.max(0, q.turnsLeft - 1); });
+      L("bad", "PYLON REVOLT: overhead lines forced through. +18% Rebellion, −4 Approval. Queued pylon upgrades deliver 1 year early. Effigies in three constituencies.");
       break;
     case "lng":
       s.treasury -= 500; mods.windOverride = 0.05; mods.tempFleet = 60; // whatever it takes
@@ -645,6 +710,34 @@ function applyCrisisChoice(state, fx) {
       s.pc = clamp(s.pc - 6, 0, 100); s.approval = clamp(s.approval - 4, 0, 100);
       L("info", "EV MANDATE: delayed. The green lobby projects your face onto Battersea Power Station. Unflatteringly.");
       break;
+    case "doggerFix":
+      s.treasury -= 300;
+      L("info", "DOGGER REPAIR: £300m emergency contract signed. L2 fully restored next year. The cable-layers earn their Christmas bonus.");
+      break;
+    case "doggerDefer": {
+      if (!s.links.L2) s.links.L2 = { cap: 6 };
+      s.links.L2.cap = Math.max(1, s.links.L2.cap - 2);
+      L("bad", `DOGGER DEFERRED: L2 derated to ${r1(s.links.L2.cap)} GW. Curtailment fines incoming from Scotland. Hope the wind stays light.`);
+      break;
+    }
+    case "scotTariffAccept":
+      s.treasury -= 200; s.scotTariff = true;
+      L("warn", "SCOTTISH TARIFF: −£200m p.a. agreement signed. Grid integrity guaranteed. The Chancellor has flagged the new line item with visible displeasure.");
+      break;
+    case "scotBuild":
+      s.treasury -= 800;
+      if (!s.links.L1) s.links.L1 = { cap: 4 };
+      s.links.L1.cap += 2;
+      L("good", "QUEENSFERRY COUNTER: £800m investment, +2 GW on Scotland→Midlands permanently. Edinburgh and London simultaneously issue identical press releases claiming full credit.");
+      break;
+    case "evSurgeLng":
+      s.treasury -= 200; mods.tempFleet = 8;
+      L("info", "EV SURGE: £200m emergency balancing deployed. The nation charges its cars in peace. The grid holds. The Treasury does not smile.");
+      break;
+    case "evSurgeCurtail":
+      s.approval = clamp(s.approval - 4, 0, 100); s.rebellion = clamp(s.rebellion + 6, 0, 100);
+      L("warn", "EV SURGE: demand curtailment invoked. The chargers blink off at 10pm. −4 Approval, +6% Rebellion. The Daily Mail runs a photo of a man looking at his car.");
+      break;
     default: break;
   }
   s.log = [...state.log, ...logs];
@@ -711,7 +804,8 @@ function resolveYear(prev, mods) {
   const unserved = f.gasNeeded - gasFired;
 
   /* 5 — money */
-  const income = ECON.baseIncome + (prev.year - 1) * 30 + (s.policies.carbonLevy ? 300 : 0);
+  const income = ECON.baseIncome + (prev.year - 1) * 30 + (s.policies.carbonLevy ? 300 : 0)
+    + (s.policies.heatPumpMandate ? 150 : 0) - (s.scotTariff ? 200 : 0) + (s.baseIncomeBonus || 0);
   const gasCost = gasFired * ECON.gasFuelCostPerGW;
   const fine = f.curtailed * ECON.curtailFinePerGW;
   s.treasury = s.treasury + income - gasCost - fine;
@@ -729,6 +823,7 @@ function resolveYear(prev, mods) {
   /* 7 — net zero + intermittency */
   s.netZero = r1(clamp((1 - gasFired / f.demand) * 100, 0, 100));
   s.intermittency = r1(intermittencyRisk(s, f.demand));
+  s.netZeroHistory = [...(prev.netZeroHistory || []).slice(-11), s.netZero];
 
   /* 8 — public mood */
   let dApproval = 0, dRebellion = 0;
@@ -772,8 +867,19 @@ function resolveYear(prev, mods) {
   if (!s.gameOver && s.treasury < 0) s.gameOver = { type: "bankrupt", detail: `The Treasury balance hit ${fmtM(s.treasury)}. The IMF answers on the second ring.` };
   if (!s.gameOver && s.rebellion >= 100) s.gameOver = { type: "coup", detail: "Letters reached the threshold. A leadership challenge was declared during your conference speech." };
 
-  /* 12 — year-end summary */
-  L("info", `FY${prev.year} CLOSE — Demand ${fmtGW(f.demand)} | Clean delivered ${fmtGW(f.cleanDelivered + f.batteryFirm + s.firmImports)} | Gas fired ${fmtGW(gasFired)} | Wind capacity factor ${Math.round(windCF * 100)}% | Net Zero ${s.netZero}%.`);
+  /* 12 — year-end summary with cause attribution */
+  const satLines = Object.keys(s.links).filter(id => {
+    const cap = s.links[id] ? s.links[id].cap : 0;
+    const fl = f.byLink[id] || 0;
+    return cap > 0 && fl >= cap - 0.1;
+  }).map(id => LINK_DEFS[id].name);
+  const curtailNote = f.curtailed > 0.05
+    ? ` | ⚠ Curtailed ${fmtGW(f.curtailed)}${satLines.length ? ` (${satLines[0]} saturated)` : ""} — fine ${fmtM(fine)}`
+    : "";
+  const gasNote = gasFired > 0.5
+    ? ` | Gas fired ${fmtGW(gasFired)}${f.curtailed > 0.05 ? " to cover southern gap from curtailment" : s.policies.carbonLevy ? " (levy applies, fleet shrinking)" : ""}`
+    : " | Gas fleet idle — full clean delivery";
+  L("info", `FY${prev.year} CLOSE — Demand ${fmtGW(f.demand)} | Clean ${fmtGW(f.cleanDelivered + f.batteryFirm + s.firmImports)} | Wind ${Math.round(windCF * 100)}% CF | Net Zero ${s.netZero}%${curtailNote}${gasNote}.`);
 
   s.lastYear = { year: prev.year, windCF, solarCF, gasFired, unserved, flows: f, income, gasCost, fine };
   s.log = [...prev.log, ...logs];
@@ -844,6 +950,12 @@ function Header({ s, muted, onToggleMute }) {
   const rebColor = s.rebellion >= 75 ? "text-red-400 blink" : s.rebellion >= 45 ? "text-amber-400" : "text-green-400";
   const treColor = s.treasury < 400 ? "text-red-400" : s.treasury < 1200 ? "text-amber-400" : "text-green-400";
   const priColor = s.price > 14 ? "text-red-400" : s.price > 10 ? "text-amber-400" : "text-green-400";
+  const history = s.netZeroHistory || [];
+  const nzTrend = history.length >= 2 ? r1(history[history.length - 1] - history[history.length - 2]) : 0;
+  const trendStr = nzTrend > 0.3 ? `▲ +${nzTrend}%` : nzTrend < -0.3 ? `▼ ${nzTrend}%` : "= steady";
+  const trendCol = nzTrend > 0.3 ? "text-green-400" : nzTrend < -0.3 ? "text-red-400" : "text-slate-400";
+  const annualIncome = ECON.baseIncome + (s.year - 1) * 30 + (s.policies.carbonLevy ? 300 : 0)
+    + (s.policies.heatPumpMandate ? 150 : 0) - (s.scotTariff ? 200 : 0) + (s.baseIncomeBonus || 0);
   return (
     <header className="shrink-0 bg-[#1e293b] border-b border-slate-700 px-2 sm:px-4 py-1.5 sm:py-2 flex items-center gap-2 sm:gap-3">
       <div className="shrink-0">
@@ -852,11 +964,11 @@ function Header({ s, muted, onToggleMute }) {
       </div>
       <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto flex-1 min-w-0 py-0.5">
         <Stat label="Year" value={`${s.year} / ${ECON.totalYears}`} sub={`FY ${2025 + s.year}`} color="text-slate-100" />
-        <Stat label="Treasury" value={fmtM(s.treasury)} sub={`+${fmtM(ECON.baseIncome + (s.year - 1) * 30 + (s.policies.carbonLevy ? 300 : 0))}/yr`} color={treColor} />
+        <Stat label="Treasury" value={fmtM(s.treasury)} sub={`${annualIncome >= 0 ? "+" : ""}${fmtM(annualIncome)}/yr`} color={treColor} />
         <Stat label="Pol. Capital" value={`${Math.round(s.pc)} PC`} sub={`+${ECON.pcRegen}/yr`} color={s.pc < 20 ? "text-amber-400" : "text-green-400"} />
         <Stat label="Price" value={fmtP(s.price)} sub="per kWh" color={priColor} />
         <Stat label="Rebellion" value={`${Math.round(s.rebellion)}%`} sub="coup at 100%" color={rebColor} />
-        <Stat label="Net Zero" value={`${r1(s.netZero)}%`} sub="clean share" color="text-green-400" />
+        <Stat label="Net Zero" value={`${r1(s.netZero)}%`} sub={<span className={trendCol}>{trendStr}</span>} color="text-green-400" />
       </div>
       <button onClick={onToggleMute} title={muted ? "Unmute" : "Mute"}
         className="shrink-0 px-2 sm:px-2.5 py-2 rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 text-lg leading-none">
@@ -1272,9 +1384,10 @@ function DefaultTab({ state, flows, dispatch }) {
       <Section title="NATIONAL DASHBOARD">
         <Row k="Demand this year" v={fmtGW(flows.demand)} />
         <Row k="Demand next year" v={fmtGW(nextDemand)} tone="warn" />
-        <Row k="Demand by Year 12" v={fmtGW(65 + state.demandExtra + state.demandExtraD)} tone="warn" />
+        <Row k="Demand by Year 12" v={fmtGW(demandForYear(12, state.demandExtra) + state.demandExtraD)} tone="warn" />
         <Row k="Gas backup fleet" v={fmtGW(state.gasFleet)} tone={state.gasFleet < flows.gasNeeded ? "bad" : null} />
         <Row k="Firm imports" v={fmtGW(state.firmImports)} />
+        {state.scotTariff && <Row k="Scottish transmission tariff" v="−£200m/yr" tone="bad" />}
         <Row k="Public approval" v={`${Math.round(state.approval)}%`} tone={state.approval < 35 ? "bad" : null} />
         <Row k="🌬 Met Office wind outlook (next yr)" v={`${Math.round(state.windNext * 100)}% of normal`} tone={state.windNext < 0.83 ? "warn" : null} />
         <div className="mt-2">
@@ -1294,7 +1407,10 @@ function DefaultTab({ state, flows, dispatch }) {
       </Section>
 
       <Section title="GLOBAL POLICY LEVERS">
-        {POLICIES.map(P => (
+        {state.year < 7 && (
+          <div className="text-[10px] text-cyan-600 font-term mb-2 px-1">♨️ 📊 Late-game policies unlock at Year 7</div>
+        )}
+        {POLICIES.filter(P => !P.minYear || state.year >= P.minYear).map(P => (
           <PolicyBtn
             key={P.id}
             done={state.policies[P.id]}
@@ -1340,7 +1456,7 @@ function DefaultTab({ state, flows, dispatch }) {
             <div>battery: absorbs 0.5·GW of spill locally + 0.5·GW firm cover</div>
             <div>intermittency = (wind+solar − {state.firmMult}·(nuclear+battery+imports)) / demand</div>
             <div>net zero = 1 − gasFired/demand</div>
-            <div>blackout if unserved &gt; 1.5 GW · brownout penalty below that</div>
+            <div>blackout if unserved &gt; 2.5 GW · brownout penalty (−£250m, −10 Approval, +10% Rebellion) below that</div>
             <div>income £600m/yr (+£300m levy) · gas fuel £9m per GW fired</div>
             <div>wind capacity factor drawn 75–105% yearly (5% in a Dunkelflaute; strato-kites immune)</div>
           </div>
@@ -1693,28 +1809,59 @@ function ReportModal({ state, dispatch }) {
   );
 }
 
-function IntroModal({ dispatch }) {
+function IntroModal({ state, dispatch }) {
+  const [step, setStep] = useState("scenario"); // "scenario" | "brief"
+  const chosen = SCENARIOS.find(s => s.id === state.scenario) || SCENARIOS[0];
+  if (step === "scenario") {
+    return (
+      <ModalShell tone="good">
+        <div className="text-[10px] font-bold tracking-widest text-green-400 mb-1">CLASSIFIED — CHAIR'S EYES ONLY</div>
+        <h2 className="text-xl font-bold text-slate-100 mb-1">GridLock: The Great British Upgrade</h2>
+        <p className="text-[12px] text-slate-400 mb-3">Choose your starting scenario. Each one changes your inherited position.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+          {SCENARIOS.map(sc => (
+            <button key={sc.id} onClick={() => { dispatch({ type: "chooseScenario", id: sc.id }); }}
+              className={`text-left p-3 rounded-xl border-2 transition ${state.scenario === sc.id ? "border-green-500 bg-green-900/30" : "border-slate-600 bg-slate-800 hover:border-slate-400"}`}>
+              <div className="text-2xl mb-1">{sc.icon}</div>
+              <div className="text-sm font-bold text-slate-100">{sc.label}</div>
+              <div className="text-[10px] text-cyan-400 italic mb-1">{sc.tagline}</div>
+              <div className="text-[10px] text-slate-400 leading-relaxed">{sc.desc}</div>
+              {state.scenario === sc.id && <div className="mt-1.5 text-[10px] font-bold text-green-400">✓ SELECTED</div>}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setStep("brief")}
+          className="w-full py-3 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-900 font-bold transition">
+          Continue with "{chosen.label}" →
+        </button>
+      </ModalShell>
+    );
+  }
   return (
     <ModalShell tone="good">
       <div className="text-[10px] font-bold tracking-widest text-green-400 mb-1">CLASSIFIED — CHAIR'S EYES ONLY</div>
-      <h2 className="text-xl sm:text-2xl font-bold text-slate-100 mb-2">GridLock: The Great British Upgrade</h2>
+      <h2 className="text-xl sm:text-2xl font-bold text-slate-100 mb-0.5">GridLock: The Great British Upgrade</h2>
+      <div className="text-[10px] text-cyan-400 font-bold mb-2">{chosen.icon} Scenario: {chosen.label} — <span className="italic font-normal text-slate-400">{chosen.tagline}</span></div>
       <div className="text-[12px] sm:text-[13px] text-slate-300 space-y-2 leading-relaxed mb-4">
         <p>Welcome to NESO, Chair. The problem in one sentence: <span className="text-green-400">the wind is in Scotland, the demand is in London, and the wires in between are forty years old.</span></p>
-        <p>You have <b className="text-green-400">12 financial years</b> and <b className="text-green-400">£3,000m</b> to reach 100% Net Zero while demand nearly doubles.</p>
+        <p>You have <b className="text-green-400">12 financial years</b> to reach 100% Net Zero while demand nearly doubles. New policies unlock at Year 7.</p>
         <ul className="text-[12px] text-slate-400 list-disc pl-5 space-y-1">
           <li><b className="text-cyan-300">DRAG &amp; DROP</b> assets from the Build Palette onto regions — or cables onto the lines between them.</li>
           <li><b className="text-cyan-300">✏️ DRAW</b> brand-new transmission corridors: drop the pencil on a region, then tap the destination.</li>
-          <li><b className="text-slate-300">Watch the lines</b>: pulsing red means you're burning money on curtailed wind.</li>
+          <li><b className="text-slate-300">Watch the lines</b>: pulsing red = curtailment fines. Watch the ▲▼ trend next to Net Zero.</li>
           <li><b className="text-slate-300">Listen to Sir Reginald</b> — the advisor bar tells you what's about to go wrong.</li>
           <li><b className="text-cyan-300">🧪 The Skunkworks</b> holds the mad stuff: fusion bets, stratospheric kites, nuclear barges, hamsters.</li>
           <li><b className="text-amber-300">📱 On a phone:</b> use the bottom tabs (Map · Build · Wire · Advance); pinch to zoom the map.</li>
           <li>Lose if the Treasury hits zero, Rebellion hits 100%, or the lights go out.</li>
         </ul>
       </div>
-      <button onClick={() => dispatch({ type: "begin" })}
-        className="w-full py-3.5 rounded-lg bg-green-600 hover:bg-green-500 active:bg-green-500 text-slate-900 font-bold transition">
-        ⚡ TAKE THE CHAIR
-      </button>
+      <div className="flex gap-2">
+        <button onClick={() => setStep("scenario")} className="px-4 py-3 rounded-lg border border-slate-600 text-slate-300 hover:text-slate-100 text-sm transition">← Scenarios</button>
+        <button onClick={() => dispatch({ type: "begin" })}
+          className="flex-1 py-3 rounded-lg bg-green-600 hover:bg-green-500 active:bg-green-500 text-slate-900 font-bold transition">
+          ⚡ TAKE THE CHAIR
+        </button>
+      </div>
     </ModalShell>
   );
 }
@@ -2076,6 +2223,15 @@ function App() {
             next.approval = clamp(S.approval - 3, 0, 100);
             logText = "NIGHT OF THE LONG KNIVES: three ringleaders now hold ministerial briefs for Paperclips, Fog, and the Census. Rebellion −25%.";
             break;
+          case "heatPumpMandate":
+            next.demandExtra = S.demandExtra + 3;
+            next.approval = clamp(S.approval + 4, 0, 100);
+            logText = "HEAT PUMP MANDATE: 15 million homes electrified by 2031. Demand +3 GW permanently, but the green infrastructure rebate adds £150m/yr income. +4 Approval.";
+            break;
+          case "dsr":
+            next.demandExtra = S.demandExtra - 3;
+            logText = "DEMAND-SIDE RESPONSE: national industrial aggregation live. Peak demand −3 GW forever. Factories learn to flex. The grid says thank you.";
+            break;
           default: break;
         }
         next.log = [...S.log, { year: S.year, tone: "warn", text: logText }];
@@ -2131,6 +2287,9 @@ function App() {
         setSelected(null);
         break;
       }
+      case "chooseScenario":
+        setState(initialState(action.id));
+        break;
       case "restart":
         setState(initialState());
         setSelected(null);
@@ -2184,7 +2343,7 @@ function App() {
       </nav>
       <Toasts toasts={toasts} />
       <DragGhost ghostRef={ghostRef} dragUI={dragUI} />
-      {state.phase === "intro" && <IntroModal dispatch={dispatch} />}
+      {state.phase === "intro" && <IntroModal state={state} dispatch={dispatch} />}
       {state.phase === "crisis" && <CrisisModal state={state} dispatch={dispatch} />}
       {state.phase === "dead" && state.gameOver && <GameOverModal state={state} dispatch={dispatch} />}
       {state.phase === "report" && <ReportModal state={state} dispatch={dispatch} />}
