@@ -58,6 +58,8 @@
   .font-term { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .chip-grab { cursor: grab; touch-action: none; user-select: none; }
   .chip-grab:active { cursor: grabbing; }
+  /* robust touch scrolling for the side/build panels on mobile */
+  .scroll-y { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; touch-action: pan-y; }
 </style>
 </head>
 <body>
@@ -116,29 +118,36 @@ const NODE_DEFS = {
     id: "A", name: "Scotland & North Sea", short: "SCOTLAND",
     blurb: "Ferocious wind resource, sparse local demand. Everything it makes must travel south.",
     demandShare: 0.09, x: 158, y: 110, pillX: 196, pillY: 78,
-    yields: { wind: 1.3, solar: 0.6, nuclear: 1.0, battery: 1.0 },
-    offshoreOk: true, nimbyFactor: 1.0,
+    yields: { wind: 1.3, solar: 0.6, nuclear: 1.0, battery: 1.0, tidal: 0.9 },
+    offshoreOk: true, tidalOk: true, nimbyFactor: 1.0,
   },
   B: {
     id: "B", name: "The Industrial Midlands", short: "MIDLANDS",
     blurb: "Heavy manufacturing base-load. The crossroads of the national grid.",
-    demandShare: 0.28, x: 165, y: 300, pillX: 64, pillY: 268,
-    yields: { wind: 0.9, solar: 0.9, nuclear: 1.0, battery: 1.0 },
-    offshoreOk: false, nimbyFactor: 1.0,
+    demandShare: 0.26, x: 165, y: 300, pillX: 64, pillY: 268,
+    yields: { wind: 0.9, solar: 0.9, nuclear: 1.0, battery: 1.0, tidal: 0 },
+    offshoreOk: false, tidalOk: false, nimbyFactor: 1.0,
   },
   C: {
     id: "C", name: "East Anglian Coast", short: "EAST ANGLIA",
     blurb: "Prime offshore wind landing hub and the nuclear coast. Cable-landing country.",
-    demandShare: 0.11, x: 232, y: 392, pillX: 268, pillY: 336,
-    yields: { wind: 1.15, solar: 1.0, nuclear: 1.15, battery: 1.0 },
-    offshoreOk: true, nimbyFactor: 1.1,
+    demandShare: 0.10, x: 232, y: 392, pillX: 268, pillY: 336,
+    yields: { wind: 1.15, solar: 1.0, nuclear: 1.15, battery: 1.0, tidal: 0.8 },
+    offshoreOk: true, tidalOk: true, nimbyFactor: 1.1,
   },
   D: {
     id: "D", name: "London & South East", short: "LONDON & SE",
     blurb: "The demand monster. Half the country's load, almost none of its acreage.",
-    demandShare: 0.52, x: 192, y: 452, labelBelow: true, labelDX: -34, pillX: 234, pillY: 440,
-    yields: { wind: 0.6, solar: 1.1, nuclear: 0.9, battery: 1.0 },
-    offshoreOk: false, nimbyFactor: 1.5,
+    demandShare: 0.47, x: 192, y: 452, labelBelow: true, labelDX: -34, pillX: 234, pillY: 440,
+    yields: { wind: 0.6, solar: 1.1, nuclear: 0.9, battery: 1.0, tidal: 0 },
+    offshoreOk: false, tidalOk: false, nimbyFactor: 1.5,
+  },
+  E: {
+    id: "E", name: "South Wales & Severn", short: "S. WALES",
+    blurb: "The Severn Estuary has the second-highest tidal range on Earth. Bristol Channel winds, valleys solar, and the tides like clockwork.",
+    demandShare: 0.08, x: 86, y: 372, labelBelow: true, labelDX: -8, pillX: 40, pillY: 360,
+    yields: { wind: 1.0, solar: 0.95, nuclear: 1.0, battery: 1.0, tidal: 1.4 },
+    offshoreOk: true, tidalOk: true, nimbyFactor: 1.0,
   },
 };
 
@@ -146,18 +155,21 @@ const LINK_DEFS = {
   L1: { id: "L1", name: "Scotland → Midlands", from: "A", to: "B", baseCap: 4, subsea: true },
   L2: { id: "L2", name: "East Anglia → London", from: "C", to: "D", baseCap: 6, subsea: true },
   L3: { id: "L3", name: "Midlands → London", from: "B", to: "D", baseCap: 8, subsea: false },
+  L4: { id: "L4", name: "S. Wales → Midlands", from: "E", to: "B", baseCap: 5, subsea: false },
   /* drawable corridors — exist only once the player draws them */
   X1: { id: "X1", name: "Eastern Subsea Superhighway (Scotland → London)", from: "A", to: "D", baseCap: 0, subsea: true, fullySubsea: true, ctrl: { x: 296, y: 280 } },
   X2: { id: "X2", name: "East Coast Link (Scotland → East Anglia)", from: "A", to: "C", baseCap: 0, subsea: true, fullySubsea: true, ctrl: { x: 282, y: 226 } },
   X3: { id: "X3", name: "Anglia Backbone (East Anglia → Midlands)", from: "C", to: "B", baseCap: 0, subsea: false },
+  X4: { id: "X4", name: "Severn Subsea Link (S. Wales → London)", from: "E", to: "D", baseCap: 0, subsea: true, fullySubsea: true, ctrl: { x: 96, y: 470 } },
 };
 
 /* node-pair → corridor recipe (sorted pair key). Upgrade pairs reuse HVDC. */
 const CORRIDORS = {
-  AB: { upgrade: "L1" }, BD: { upgrade: "L3" }, CD: { upgrade: "L2" },
-  AD: { linkId: "X1", cost: 1400, delay: 3, gw: 3, label: "Eastern Subsea Superhighway" },
-  AC: { linkId: "X2", cost: 1000, delay: 2, gw: 3, label: "East Coast Link" },
-  BC: { linkId: "X3", cost: 550, delay: 1, gw: 3, rebellion: 4, label: "Anglia Backbone (overhead)" },
+  AB: { upgrade: "L1" }, BD: { upgrade: "L3" }, CD: { upgrade: "L2" }, BE: { upgrade: "L4" },
+  AD: { linkId: "X1", cost: 1200, delay: 3, gw: 4, label: "Eastern Subsea Superhighway" },
+  AC: { linkId: "X2", cost: 900, delay: 2, gw: 4, label: "East Coast Link" },
+  BC: { linkId: "X3", cost: 500, delay: 1, gw: 4, rebellion: 4, label: "Anglia Backbone (overhead)" },
+  DE: { linkId: "X4", cost: 950, delay: 2, gw: 4, label: "Severn Subsea Link" },
 };
 
 const DRAW_TOOL = { icon: "✏️", name: "Draw New Line", cost: 0,
@@ -191,25 +203,26 @@ const ASSET_TYPES = {
   onshore:  { id: "onshore",  name: "Onshore Wind",  icon: "🌀", cost: 240, gw: 2.0, kind: "wind",    nimby: 14, desc: "Cheap, fast, hated by the shires." },
   offshore: { id: "offshore", name: "Offshore Wind", icon: "🌊", cost: 550, gw: 3.0, kind: "wind",    nimby: 5,  desc: "Big turbines, big cables. Coastal nodes only." },
   solar:    { id: "solar",    name: "Solar Farm",    icon: "☀️", cost: 140, gw: 1.2, kind: "solar",   nimby: 8,  desc: "Cheap daytime power. Weak in Scotland." },
+  tidal:    { id: "tidal",    name: "Tidal Lagoon",  icon: "🌙", cost: 700, gw: 2.5, kind: "tidal",   nimby: 7,  desc: "Firm, predictable clean power from the tides. Estuaries & coasts only — superb in the Severn." },
   smr:      { id: "smr",      name: "SMR Nuclear",   icon: "⚛️", cost: 850, gw: 1.8, kind: "nuclear", nimby: 10, desc: "Firm, always-on baseload. Expensive, but it never stops." },
   battery:  { id: "battery",  name: "Battery Hub",   icon: "🔋", cost: 320, gw: 2.0, kind: "battery", nimby: 3,  desc: "Soaks curtailed wind, firms the grid, calms intermittency." },
 };
 
 const LINK_UPGRADES = {
   pylon: { id: "pylon", name: "Overhead Pylons", icon: "🗼", cost: 320, addGW: 3, delay: 1, rebellion: 4,
-           desc: "+3 GW in 1 year. Cheap steel. Enrages everyone who can see it (+4% Rebellion, NIMBY at both ends)." },
-  hvdc:  { id: "hvdc", name: "HVDC Cable (Subsea / Underground)", icon: "🧵", cost: 900, addGW: 4, delay: 2, rebellion: 0,
-           desc: "+4 GW in 2 years. Invisible, premium-priced, politically painless." },
+           desc: "+3 GW in 1 year. Cheap steel, fast. But everyone who can see it revolts (+4% Rebellion, NIMBY at both ends)." },
+  hvdc:  { id: "hvdc", name: "HVDC Cable (Subsea / Underground)", icon: "🧵", cost: 700, addGW: 5, delay: 2, rebellion: 0,
+           desc: "+5 GW in 2 years. Bigger capacity, invisible, politically painless — but slower and dearer per project." },
 };
 
 const PALETTE = [
   { cat: "asset", id: "onshore" }, { cat: "asset", id: "offshore" }, { cat: "asset", id: "solar" },
-  { cat: "asset", id: "smr" }, { cat: "asset", id: "battery" },
+  { cat: "asset", id: "tidal" }, { cat: "asset", id: "smr" }, { cat: "asset", id: "battery" },
   { cat: "link", id: "pylon" }, { cat: "link", id: "hvdc" },
   { cat: "draw", id: "corridor" },
 ];
 
-const KIND_COLOR = { wind: "#4ade80", solar: "#facc15", nuclear: "#c084fc", battery: "#38bdf8" };
+const KIND_COLOR = { wind: "#4ade80", solar: "#facc15", nuclear: "#c084fc", battery: "#38bdf8", tidal: "#2dd4bf" };
 
 /* economy constants — exposed in the Mechanics drawer */
 const ECON = {
@@ -235,9 +248,9 @@ const INNOVATIONS = [
   },
   {
     id: "severn", icon: "🐉", name: "The Severn Dragon", cost: 1500, pc: 15, years: 4, odds: 1,
-    desc: "A tidal lagoon the size of a small county. +3.5 GW of firm clean power at the Midlands. The estuary's wading birds have retained counsel (+8% Rebellion on launch).",
+    desc: "A tidal lagoon the size of a small county across the Severn Estuary. +3.5 GW of firm clean power at South Wales. The estuary's wading birds have retained counsel (+8% Rebellion on launch).",
     onLaunch: s => { s.rebellion = clamp(s.rebellion + 8, 0, 100); },
-    apply: s => { s.assets.push({ uid: uid(), type: "special", nodeId: "B", gw: 3.5, kind: "nuclear", name: "Severn Dragon Tidal", icon: "🐉" }); },
+    apply: s => { s.assets.push({ uid: uid(), type: "special", nodeId: "E", gw: 3.5, kind: "tidal", name: "Severn Dragon Tidal", icon: "🐉" }); },
     winLog: "THE SEVERN DRAGON BREATHES: 3.5 GW of tidal power, twice a day, forever. The moon is now part of the workforce.",
   },
   {
@@ -265,7 +278,7 @@ const INNOVATIONS = [
   {
     id: "pylonart", icon: "🎨", name: "Pylons of the People", cost: 150, pc: 5, years: 0, odds: 1,
     desc: "Commission Turner-Prize artists to redesign every pylon as public sculpture. All NIMBY −25, +8 Approval. Instant.",
-    apply: s => { for (const k of ["A","B","C","D"]) s.nimby[k] = clamp(s.nimby[k] - 25, 0, 100); s.approval = clamp(s.approval + 8, 0, 100); },
+    apply: s => { for (const k of ["A","B","C","D","E"]) s.nimby[k] = clamp(s.nimby[k] - 25, 0, 100); s.approval = clamp(s.approval + 8, 0, 100); },
     winLog: "PYLONS OF THE PEOPLE: the Grade-II-listing applications begin immediately. NIMBY −25 nationwide.",
   },
   {
@@ -299,7 +312,7 @@ const INNOVATIONS = [
 /* --------------------------- crisis card deck -------------------------- */
 function firmCoverGW(state) {
   const t = totalsByKind(state);
-  return t.nuclear + t.battery * ECON.batteryFirmFactor + state.firmImports + state.gasFleet;
+  return t.nuclear + t.tidal * 0.92 + t.battery * ECON.batteryFirmFactor + state.firmImports + state.gasFleet;
 }
 
 const CRISIS_DECK = [
@@ -481,9 +494,11 @@ function initialState(scenarioId = "default") {
     makeAsset("offshore", "C", 2.0),
     makeAsset("smr",      "C", 1.2),
     makeAsset("solar",    "D", 0.5),
+    makeAsset("onshore",  "E", 1.5),
   ];
   return {
     scenario: scenarioId,
+    playerName: (typeof window !== "undefined" && window.__gridlockName) || "",
     year: 1, phase: "intro",
     treasury: startTreasury, pc: ECON.startPC,
     rebellion: ECON.startRebellion + (m.startRebellion || 0), approval: 52,
@@ -493,17 +508,18 @@ function initialState(scenarioId = "default") {
     baseIncomeBonus: m.baseIncomeBonus || 0,
     costMult: 1, nimbyDecayMult: 1, windNext: 0.92,
     scotTariff: false,
+    loan: null, loanUsed: false,
     netZeroHistory: [m.startNetZero || 25],
     policies: { queueReform: false, carbonLevy: false, smartTariffs: false, communityFund: false, skillsAcademy: false, strategicReserve: false, porkBarrel: false, reshuffle: false, heatPumpMandate: false, dsr: false },
     whipsUsed: false,
-    nimby: { A: 22, B: 18, C: 30, D: 45 },
+    nimby: { A: 22, B: 18, C: 30, D: 45, E: 20 },
     assets: startAssets,
     queue: [
       { uid: "q1", type: "offshore", nodeId: "C", gw: 3.0, turnsLeft: 1, label: "Offshore Wind 3.0 GW" },
       { uid: "q2", type: "onshore",  nodeId: "A", gw: 2.6, turnsLeft: 2, label: "Onshore Wind 2.6 GW" },
       { uid: "q3", type: "battery",  nodeId: "B", gw: 2.0, turnsLeft: 3, label: "Battery Hub 2.0 GW" },
     ],
-    links: { L1: { cap: 4 + (m.l1Cap || 0) }, L2: { cap: 6 }, L3: { cap: 8 } },
+    links: { L1: { cap: 4 + (m.l1Cap || 0) }, L2: { cap: 6 }, L3: { cap: 8 }, L4: { cap: 5 } },
     linkQueue: [],
     innovations,
     deck: shuffle(CRISIS_DECK),
@@ -514,26 +530,27 @@ function initialState(scenarioId = "default") {
       { year: 0, tone: "good", text: "TIP: drag assets from the BUILD PALETTE straight onto the map. Visit the SKUNKWORKS tab when you feel brave. Late-game policies unlock at Year 7." },
     ],
     gameOver: null,
-    stats: { fines: 0, curtailed: 0, gasBurned: 0, built: 0, pylons: 0, hvdc: 0, underground: 0, brownouts: 0, peakPrice: 8.5, batteriesGW: 0, innovations: 0, corridors: 0, lowestTreasury: startTreasury },
+    stats: { fines: 0, curtailed: 0, gasBurned: 0, built: 0, pylons: 0, hvdc: 0, underground: 0, brownouts: 0, emergencyImports: 0, peakPrice: 8.5, batteriesGW: 0, innovations: 0, corridors: 0, lowestTreasury: startTreasury },
     lastYear: null,
   };
 }
 
 /* ------------------------ physics / flow engine ------------------------ */
 function nodeGen(state, nodeId, windCF, solarCF) {
-  let windCap = 0, solarCap = 0, nuclear = 0, battery = 0, gen = 0;
+  let windCap = 0, solarCap = 0, nuclear = 0, battery = 0, tidal = 0, gen = 0;
   for (const a of state.assets) {
     if (a.nodeId !== nodeId) continue;
     if (a.kind === "wind") { windCap += a.gw; gen += a.gw * (a.dunkelProof ? Math.max(windCF, 0.85) : windCF); }
     else if (a.kind === "solar") { solarCap += a.gw; gen += a.gw * solarCF; }
     else if (a.kind === "nuclear") { nuclear += a.gw; gen += a.gw; }
+    else if (a.kind === "tidal") { tidal += a.gw; gen += a.gw * 0.92; }  // tides: firm & predictable, ~92% capacity factor
     else if (a.kind === "battery") { battery += a.gw; }
   }
-  return { windCap, solarCap, nuclear, battery, gen };
+  return { windCap, solarCap, nuclear, battery, tidal, gen };
 }
 
 function totalsByKind(state) {
-  const t = { wind: 0, solar: 0, nuclear: 0, battery: 0 };
+  const t = { wind: 0, solar: 0, nuclear: 0, battery: 0, tidal: 0 };
   for (const a of state.assets) t[a.kind] += a.gw;
   return t;
 }
@@ -541,12 +558,12 @@ function totalsByKind(state) {
 function computeFlows(state, windCF, solarCF) {
   const demand = demandForYear(state.year, state.demandExtra);
   const dem = {};
-  for (const id of ["A", "B", "C", "D"]) dem[id] = demand * NODE_DEFS[id].demandShare;
+  for (const id of ["A", "B", "C", "D", "E"]) dem[id] = demand * NODE_DEFS[id].demandShare;
   dem.D += state.demandExtraD;
   const demandTotal = demand + state.demandExtraD;
 
   const g = {};
-  for (const id of ["A", "B", "C", "D"]) g[id] = nodeGen(state, id, windCF, solarCF);
+  for (const id of ["A", "B", "C", "D", "E"]) g[id] = nodeGen(state, id, windCF, solarCF);
 
   const capOf = id => (state.links[id] ? state.links[id].cap : 0);
 
@@ -568,25 +585,33 @@ function computeFlows(state, windCF, solarCF) {
   const absorbC = Math.min(remC, g.C.battery * ECON.batteryFirmFactor);
   const curtailC = remC - absorbC;
 
+  /* South Wales exports east to the Midlands, or south to London via the Severn link */
+  const surplusE = Math.max(0, g.E.gen - dem.E);
+  const flow4 = Math.min(surplusE, capOf("L4"));                       // E → B
+  let remE = surplusE - flow4;
+  const flowX4 = Math.min(remE, capOf("X4")); remE -= flowX4;          // E → D direct subsea
+  const absorbE = Math.min(remE, g.E.battery * ECON.batteryFirmFactor);
+  const curtailE = remE - absorbE;
+
   /* Midlands pool re-exports to London */
-  const availB = g.B.gen + flow1 + flowX3;
+  const availB = g.B.gen + flow1 + flowX3 + flow4;
   const surplusB = Math.max(0, availB - dem.B);
   const flow3 = Math.min(surplusB, capOf("L3"));                       // B → D
   let remB = surplusB - flow3;
   const absorbB = Math.min(remB, g.B.battery * ECON.batteryFirmFactor);
   const curtailB = remB - absorbB;
 
-  const curtailed = curtailA + curtailB + curtailC;
-  const cleanGen = g.A.gen + g.B.gen + g.C.gen + g.D.gen;
+  const curtailed = curtailA + curtailB + curtailC + curtailE;
+  const cleanGen = g.A.gen + g.B.gen + g.C.gen + g.D.gen + g.E.gen;
   const cleanDelivered = Math.max(0, cleanGen - curtailed);
   const t = totalsByKind(state);
   const batteryFirm = t.battery * ECON.batteryFirmFactor;
   const gasNeeded = Math.max(0, demandTotal - cleanDelivered - batteryFirm - state.firmImports);
 
   return {
-    demand: demandTotal, dem, g, flow1, flow2, flow3,
-    byLink: { L1: flow1, L2: flow2, L3: flow3, X1: flowX1, X2: flowX2, X3: flowX3 },
-    curtailA, curtailB, curtailC, curtailed,
+    demand: demandTotal, dem, g, flow1, flow2, flow3, flow4,
+    byLink: { L1: flow1, L2: flow2, L3: flow3, L4: flow4, X1: flowX1, X2: flowX2, X3: flowX3, X4: flowX4 },
+    curtailA, curtailB, curtailC, curtailE, curtailed,
     cleanGen, cleanDelivered, batteryFirm, gasNeeded, totals: t,
   };
 }
@@ -594,7 +619,7 @@ function computeFlows(state, windCF, solarCF) {
 function intermittencyRisk(state, demand) {
   const t = totalsByKind(state);
   const variable = t.wind + t.solar;
-  const firm = (t.nuclear + t.battery + state.firmImports) * state.firmMult;
+  const firm = (t.nuclear + t.tidal + t.battery + state.firmImports) * state.firmMult;
   return clamp(((variable - firm) / Math.max(demand, 1)) * 100, 0, 99);
 }
 
@@ -820,7 +845,15 @@ function resolveYear(prev, mods) {
     + (s.policies.heatPumpMandate ? 150 : 0) - (s.scotTariff ? 200 : 0) + (s.baseIncomeBonus || 0);
   const gasCost = gasFired * ECON.gasFuelCostPerGW;
   const fine = f.curtailed * ECON.curtailFinePerGW;
-  s.treasury = s.treasury + income - gasCost - fine;
+  /* loan repayment — borrowed capital is paid back in equal instalments */
+  let loanPayment = 0;
+  if (s.loan && s.loan.yearsLeft > 0) {
+    loanPayment = s.loan.perYear;
+    const yearsLeft = s.loan.yearsLeft - 1;
+    s.loan = yearsLeft > 0 ? { ...s.loan, yearsLeft } : null;
+    if (yearsLeft <= 0) L("good", "DEBT CLEARED: the National Grid Bond is repaid in full. The bond markets exhale.");
+  }
+  s.treasury = s.treasury + income - gasCost - fine - loanPayment;
   s.stats.fines += fine; s.stats.curtailed += f.curtailed; s.stats.gasBurned += gasFired;
 
   if (f.curtailed > 0.05) {
@@ -846,7 +879,7 @@ function resolveYear(prev, mods) {
   if (s.intermittency > 40) { dApproval -= 6; dRebellion += 4; L("bad", `GRID INSTABILITY: intermittency risk at ${s.intermittency}%. Frequency excursions reported. Build firm capacity (nuclear / batteries).`); }
   if (s.approval + dApproval < 30) dRebellion += 5;
 
-  for (const id of ["A", "B", "C", "D"]) {
+  for (const id of ["A", "B", "C", "D", "E"]) {
     if (s.nimby[id] > 70) { dRebellion += 2; L("warn", `NIMBY FLASHPOINT: opposition in ${NODE_DEFS[id].short} at ${Math.round(s.nimby[id])}%. Local MPs are tabling motions.`); }
     s.nimby[id] = clamp(s.nimby[id] - ECON.nimbyDecay * (s.nimbyDecayMult || 1), 0, 100);
   }
@@ -863,15 +896,23 @@ function resolveYear(prev, mods) {
   s.pc = clamp(s.pc + ECON.pcRegen, 0, 100);
 
   /* 9 — supply security outcomes
-     blackout tolerance scales with demand: a fixed margin would doom any large
-     grid late-game. Below the blackout threshold, shortfalls are survivable
-     brownouts (a penalty and a warning) rather than instant game-over. */
-  const blackoutTol = Math.max(ECON.brownoutTolerance, f.demand * 0.12);
-  if (unserved > blackoutTol) {
-    s.gameOver = { type: "blackout", detail: `Unserved demand hit ${fmtGW(unserved)} (tolerance ${fmtGW(blackoutTol)}). The grid frequency collapsed at 17:42 on a Tuesday in January.` };
+     A shortfall no longer kills you outright. A small gap is a brownout; a large
+     gap forces an EMERGENCY FOREIGN POWER DEAL — interconnector imports and diesel
+     bought at panic spot-prices, costing a fortune AND political capital. The lights
+     stay on, but a string of these will bankrupt the Treasury (the real fail state). */
+  const brownoutTol = Math.max(ECON.brownoutTolerance, f.demand * 0.12);
+  if (unserved > brownoutTol) {
+    const emCost = Math.round(unserved * 120);                 // £120m per unserved GW — extortionate
+    const pcHit = Math.min(Math.round(s.pc), Math.round(unserved * 4));
+    s.treasury -= emCost;
+    s.pc = clamp(s.pc - pcHit, 0, 100);
+    s.approval = clamp(s.approval - 12, 0, 100);
+    s.rebellion = clamp(s.rebellion + 14, 0, 100);
+    s.stats.brownouts++; s.stats.emergencyImports++;
+    L("bad", `⚡ GRID EMERGENCY: ${fmtGW(unserved)} of demand unserved. Emergency interconnector imports and diesel deals struck with France, Norway and Ireland at panic prices — ${fmtM(emCost)}, −${pcHit} PC, −12 Approval, +14% Rebellion. The lights stayed on. Barely. The front pages did not forgive you.`);
   } else if (unserved > 0) {
     s.treasury -= 200; s.rebellion = clamp(s.rebellion + 6, 0, 100); s.approval = clamp(s.approval - 7, 0, 100); s.stats.brownouts++;
-    L("bad", `ROLLING BROWNOUTS: ${fmtGW(unserved)} short (blackout above ${fmtGW(blackoutTol)}). Emergency demand control invoked. −£200m, Rebellion +6%, Approval −7.`);
+    L("bad", `ROLLING BROWNOUTS: ${fmtGW(unserved)} short (emergency imports kick in above ${fmtGW(brownoutTol)}). Emergency demand control invoked. −£200m, Rebellion +6%, Approval −7.`);
   }
 
   /* 10 — carbon levy retires gas fleet */
@@ -937,7 +978,7 @@ function advise(state, flows) {
   const firm = firmCoverGW(state);
   const marginNext = firm + flows.cleanDelivered - nextDemand;
   if (state.netZero >= 100) return { tone: "good", text: "One hundred percent. I have nothing to add, Chair, except that I never doubted you. Officially." };
-  if (marginNext < 3.5) return { tone: "bad", text: `Next year's supply margin is roughly ${r1(marginNext)} GW. That is 'national blackout' territory. Drag an ⚛️ SMR or 🔋 Battery onto the map TODAY — or buy the 🛢️ Strategic Gas Reserve, Chair.` };
+  if (marginNext < 3.5) return { tone: "bad", text: `⚠ Next year's supply margin is only ~${r1(marginNext)} GW. If a wind lull hits, we'll be forced into emergency foreign power deals at ~£120m per GW short — plus a brutal hit to your Political Capital and Approval. Firm up NOW: drag a 🌙 Tidal Lagoon, ⚛️ SMR or 🔋 Battery onto the map, or buy the 🛢️ Strategic Gas Reserve.` };
   const sat = Object.keys(state.links).filter(id => state.links[id].cap > 0 && (flows.byLink[id] || 0) / state.links[id].cap >= 0.99);
   if (sat.length) {
     const d = LINK_DEFS[sat[0]];
@@ -1022,7 +1063,7 @@ const ISLAND_PATHS = [
   "M152 474 L166 472 L170 479 L156 482 Z",                              // Isle of Wight
 ];
 
-const LINK_LABEL_OFF = { L1: { dx: -2, dy: -6 }, L2: { dx: 20, dy: 22 }, L3: { dx: -60, dy: 4 }, X1: { dx: 6, dy: 0 }, X2: { dx: 6, dy: -28 }, X3: { dx: -28, dy: -16 } };
+const LINK_LABEL_OFF = { L1: { dx: -2, dy: -6 }, L2: { dx: 20, dy: 22 }, L3: { dx: -60, dy: 4 }, L4: { dx: -30, dy: -14 }, X1: { dx: 6, dy: 0 }, X2: { dx: 6, dy: -28 }, X3: { dx: -28, dy: -16 }, X4: { dx: -56, dy: 6 } };
 
 function linkPathD(def) {
   const from = NODE_DEFS[def.from], to = NODE_DEFS[def.to];
@@ -1090,7 +1131,7 @@ function PendingCorridor({ q }) {
 function GhostRoutes({ state }) {
   return (
     <g pointerEvents="none">
-      {["X1", "X2", "X3"].map(id => {
+      {["X1", "X2", "X3", "X4"].map(id => {
         if (state.links[id] || state.linkQueue.some(q => q.linkId === id)) return null;
         const def = LINK_DEFS[id];
         const pair = [def.from, def.to].sort().join("");
@@ -1109,7 +1150,7 @@ function GhostRoutes({ state }) {
 
 /* SimCity layer: every installed asset is a real icon on the map.
    Land kit spirals out around the node; offshore kit marches out to sea. */
-const SEAWARD = { A: { x: 36, y: -10, sx: 11, sy: -8 }, C: { x: 32, y: 14, sx: 10, sy: 9 }, B: { x: -40, y: -16, sx: -11, sy: -7 }, D: { x: 30, y: 26, sx: 11, sy: 7 } };
+const SEAWARD = { A: { x: 36, y: -10, sx: 11, sy: -8 }, C: { x: 32, y: 14, sx: 10, sy: 9 }, B: { x: -40, y: -16, sx: -11, sy: -7 }, D: { x: 30, y: 26, sx: 11, sy: 7 }, E: { x: -34, y: 18, sx: -10, sy: 8 } };
 function landSlot(i) {
   const GA = 2.39996; // golden angle keeps the sprawl organic
   const r = 27 + 5.6 * Math.sqrt(i + 0.5);
@@ -1323,15 +1364,15 @@ function MapPanel({ state, flows, selected, onSelect, svgRef, dragUI, onStartDra
             <text x="104" y="528" fontSize="9">ENGLISH CHANNEL</text>
           </g>
           {drawing && <GhostRoutes state={state} />}
-          {["L1", "L3", "L2", "X1", "X2", "X3"].filter(id => state.links[id]).map(id => (
+          {["L1", "L3", "L2", "L4", "X1", "X2", "X3", "X4"].filter(id => state.links[id]).map(id => (
             <LinkLine key={id} link={id} flows={flows} state={state} selected={selected} onSelect={onSelect} dragUI={dragUI} />
           ))}
           {state.linkQueue.filter(q => q.newLink && !state.links[q.linkId]).map(q => <PendingCorridor key={q.uid} q={q} />)}
           {anchor && <line ref={rubberRef} x1={anchor.x} y1={anchor.y} x2={anchor.x} y2={anchor.y} stroke="#22d3ee" strokeWidth="2.5" strokeDasharray="6 4" pointerEvents="none" />}
-          {["A", "B", "C", "D"].map(id => (
+          {["A", "B", "C", "D", "E"].map(id => (
             <NodeCircle key={id} id={id} state={state} flows={flows} selected={selected} onSelect={onSelect} dragUI={dragUI} drawMode={drawMode} />
           ))}
-          {["A", "B", "C", "D"].map(id => <NodeCity key={id} state={state} id={id} />)}
+          {["A", "B", "C", "D", "E"].map(id => <NodeCity key={id} state={state} id={id} />)}
         </svg>
         <div className="absolute top-2 right-2 flex flex-col gap-1.5" onClick={e => e.stopPropagation()}>
           <button onClick={() => zoomCentre(1 / 1.4)} title="Zoom in" className="w-9 h-9 sm:w-7 sm:h-7 rounded-md bg-slate-800/90 border border-slate-600 hover:bg-slate-700 active:bg-slate-600 text-slate-200 text-lg sm:text-base font-bold leading-none">+</button>
@@ -1407,6 +1448,7 @@ function DefaultTab({ state, flows, dispatch }) {
         <Row k="Gas backup fleet" v={fmtGW(state.gasFleet)} tone={state.gasFleet < flows.gasNeeded ? "bad" : null} />
         <Row k="Firm imports" v={fmtGW(state.firmImports)} />
         {state.scotTariff && <Row k="Scottish transmission tariff" v="−£200m/yr" tone="bad" />}
+        {state.loan && <Row k="Grid Bond repayment" v={`−${fmtM(state.loan.perYear)}/yr (${state.loan.yearsLeft} yr)`} tone="warn" />}
         <Row k="Public approval" v={`${Math.round(state.approval)}%`} tone={state.approval < 35 ? "bad" : null} />
         <Row k="🌬 Met Office wind outlook (next yr)" v={`${Math.round(state.windNext * 100)}% of normal`} tone={state.windNext < 0.83 ? "warn" : null} />
         <div className="mt-2">
@@ -1419,12 +1461,12 @@ function DefaultTab({ state, flows, dispatch }) {
             {(() => {
               const t = totalsByKind(state);
               const variableGW = r1(t.wind + t.solar);
-              const firmGW = r1(t.nuclear + t.battery * ECON.batteryFirmFactor + state.firmImports);
-              // per-node: wind+solar capacity minus nuclear and battery firm
+              const firmGW = r1(t.nuclear + t.tidal * 0.92 + t.battery * ECON.batteryFirmFactor + state.firmImports);
+              // per-node: wind+solar capacity minus nuclear, tidal and battery firm
               const nodeScore = {};
-              for (const id of ["A","B","C","D"]) {
+              for (const id of ["A","B","C","D","E"]) {
                 const g = flows.g[id];
-                nodeScore[id] = g.windCap + g.solarCap - g.nuclear - g.battery * ECON.batteryFirmFactor;
+                nodeScore[id] = g.windCap + g.solarCap - g.nuclear - (g.tidal || 0) * 0.92 - g.battery * ECON.batteryFirmFactor;
               }
               const bestNode = Object.entries(nodeScore).sort((a,b) => b[1]-a[1])[0];
               const satLink = Object.keys(state.links).find(id => {
@@ -1434,9 +1476,9 @@ function DefaultTab({ state, flows, dispatch }) {
               return (
                 <>
                   <div className="text-[10px] text-slate-500">
-                    Variable (wind+solar): <span className="text-amber-400 font-term">{variableGW} GW</span> | Firm (nuclear+batteries×50%+imports): <span className="text-green-400 font-term">{firmGW} GW</span>
+                    Variable (wind+solar): <span className="text-amber-400 font-term">{variableGW} GW</span> | Firm (nuclear+tidal+batteries×50%+imports): <span className="text-green-400 font-term">{firmGW} GW</span>
                   </div>
-                  <div className="text-[10px] text-slate-500 italic">Intermittency rises when variable far exceeds firm. A Dunkelflaute (wind lull) can leave a variable-heavy grid dangerously short.</div>
+                  <div className="text-[10px] text-slate-500 italic">Intermittency rises when variable far exceeds firm. A Dunkelflaute (wind lull) can leave a variable-heavy grid dangerously short — forcing costly emergency imports.</div>
                   {state.intermittency > 15 && bestNode && bestNode[1] > 0.5 && (
                     <div className="text-[10px] text-amber-300 bg-amber-950/30 border border-amber-800/50 rounded px-2 py-1">
                       ⚡ Best fix: add a 🔋 Battery at <b>{NODE_DEFS[bestNode[0]].short}</b> — it has {fmtGW(r1(bestNode[1]))} more variable than firm generation. Each 2 GW battery firms up 1 GW of that gap.
@@ -1447,9 +1489,9 @@ function DefaultTab({ state, flows, dispatch }) {
                       🔌 A battery at {NODE_DEFS[LINK_DEFS[satLink].from].short} also reduces curtailment on the saturated {LINK_DEFS[satLink].name} line.
                     </div>
                   )}
-                  {t.nuclear < 3 && (
+                  {t.nuclear + t.tidal < 3 && (
                     <div className="text-[10px] text-purple-300 bg-purple-950/30 border border-purple-800/50 rounded px-2 py-1">
-                      ⚛️ Low nuclear ({fmtGW(r1(t.nuclear))}). SMR nuclear at any node gives firm 24/7 baseload — the most powerful way to cut intermittency.
+                      ⚛️ Low firm baseload ({fmtGW(r1(t.nuclear + t.tidal))} nuclear+tidal). An ⚛️ SMR anywhere — or a 🌙 Tidal Lagoon at S. Wales — gives firm 24/7 power, the strongest cut to intermittency.
                     </div>
                   )}
                   {state.intermittency <= 15 && <div className="text-[10px] text-green-400">✓ Firm cover looks healthy. Keep building if demand is still rising.</div>}
@@ -1464,6 +1506,11 @@ function DefaultTab({ state, flows, dispatch }) {
             <span className={margin < 3 ? "text-red-400 font-bold" : "text-green-400"}>{margin >= 0 ? "+" : ""}{r1(margin)} GW</span>
           </div>
           <Bar value={Math.max(margin, 0)} max={20} color={margin < 3 ? "bg-red-500" : margin < 8 ? "bg-amber-400" : "bg-green-500"} />
+          {margin < 5 && (
+            <div className="text-[10px] text-red-300 bg-red-950/40 border border-red-800 rounded px-2 py-1 mt-1.5">
+              🕯 <b>BLACKOUT RISK.</b> If a wind lull or cold snap pushes the shortfall past ~{fmtGW(Math.max(ECON.brownoutTolerance, flows.demand * 0.12))}, you'll be forced into emergency foreign power deals at <b>£120m per GW</b> short — and lose Political Capital and Approval. Add firm capacity or imports before next year.
+            </div>
+          )}
         </div>
       </Section>
 
@@ -1492,6 +1539,32 @@ function DefaultTab({ state, flows, dispatch }) {
         </button>
       </Section>
 
+      <Section title="TREASURY & FINANCE">
+        {(() => {
+          const yearsLeft = Math.max(1, ECON.totalYears - state.year + 1);
+          const PRINCIPAL = 1800, INTEREST = 1.25;
+          const perYear = Math.ceil((PRINCIPAL * INTEREST) / yearsLeft);
+          if (state.loan) {
+            return (
+              <div className="px-3 py-2 rounded-lg border border-sky-800 bg-sky-950/30">
+                <div className="text-sm font-bold text-sky-300">💷 National Grid Bond active</div>
+                <div className="text-[11px] text-slate-400">Repaying {fmtM(state.loan.perYear)}/yr for {state.loan.yearsLeft} more year{state.loan.yearsLeft > 1 ? "s" : ""}.</div>
+              </div>
+            );
+          }
+          if (state.loanUsed) {
+            return <div className="text-[11px] text-slate-500 italic">National Grid Bond already issued this term. One per government.</div>;
+          }
+          return (
+            <button onClick={() => dispatch({ type: "borrow" })}
+              className="w-full text-left px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 hover:bg-slate-700 transition">
+              <div className="text-sm font-bold text-slate-100">💷 Issue a National Grid Bond — borrow {fmtM(PRINCIPAL)}</div>
+              <div className="text-[11px] text-slate-400">Get {fmtM(PRINCIPAL)} now to spend on the build-out. Repay {fmtM(perYear)}/yr over the remaining {yearsLeft} year{yearsLeft > 1 ? "s" : ""} ({fmtM(Math.round(PRINCIPAL * INTEREST))} total, 25% interest). One-time only.</div>
+            </button>
+          );
+        })()}
+      </Section>
+
       <Section title={`CONNECTIONS QUEUE (${state.queue.length + state.linkQueue.length})`}>
         {state.queue.length + state.linkQueue.length === 0 && <div className="text-[11px] text-slate-500 italic">Queue empty. Suspiciously tidy.</div>}
         {state.queue.map(q => (
@@ -1515,10 +1588,13 @@ function DefaultTab({ state, flows, dispatch }) {
             <div>price = 3.5 + 0.19·gasGW + 0.12·curtailGW (+1.2 levy)</div>
             <div>curtail fine = £40m × excess GW over boundary cap</div>
             <div>battery: absorbs 0.5·GW of spill locally + 0.5·GW firm cover</div>
-            <div>intermittency = (wind+solar − {state.firmMult}·(nuclear+battery+imports)) / demand</div>
+            <div>tidal: firm clean power at ~92% capacity factor (Severn-class)</div>
+            <div>intermittency = (wind+solar − {state.firmMult}·(nuclear+tidal+battery+imports)) / demand</div>
             <div>net zero = 1 − gasFired/demand</div>
-            <div>blackout if unserved &gt; 2.5 GW · brownout penalty (−£250m, −10 Approval, +10% Rebellion) below that</div>
-            <div>income £600m/yr (+£300m levy) · gas fuel £9m per GW fired</div>
+            <div>shortfall &gt; max(4, 12%·demand) ⇒ EMERGENCY IMPORTS: −£120m/GW, −4 PC/GW, −12 Approval, +14% Rebellion (no longer instant game-over)</div>
+            <div>smaller shortfall ⇒ brownout: −£200m, −7 Approval, +6% Rebellion</div>
+            <div>income £650m/yr +£30m/yr (+£300m levy) · gas fuel £9m per GW fired</div>
+            <div>pylon: +3 GW/1yr/£320m/+4% rebellion · HVDC: +5 GW/2yr/£700m/painless</div>
             <div>wind capacity factor drawn 75–105% yearly (5% in a Dunkelflaute; strato-kites immune)</div>
           </div>
         )}
@@ -1609,6 +1685,7 @@ function NodeTab({ state, flows, nodeId, dispatch }) {
         <div className="text-[10px] text-slate-500 mb-1.5">Tip: you can also drag these from the palette straight onto the map.</div>
         {Object.values(ASSET_TYPES).map(t => {
           if (t.id === "offshore" && !def.offshoreOk) return null;
+          if (t.id === "tidal" && !def.tidalOk) return null;
           const yieldMult = t.kind === "battery" ? 1 : def.yields[t.kind];
           const effGW = r1(t.gw * yieldMult);
           const cost = Math.round(t.cost * (t.id === "battery" ? state.batteryDiscount : 1) * (state.costMult || 1));
@@ -1702,7 +1779,7 @@ function RightPanel({ state, flows, selected, tab, setTab, dispatch }) {
             </div>
           )}
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto p-3">
+      <div className="scroll-y flex-1 min-h-0 p-3">
         {!selected && tab === "national" && <DefaultTab state={state} flows={flows} dispatch={dispatch} />}
         {!selected && tab === "lab" && <LabTab state={state} dispatch={dispatch} />}
         {selected && selected.type === "node" && <NodeTab state={state} flows={flows} nodeId={selected.id} dispatch={dispatch} />}
@@ -1847,6 +1924,7 @@ function ReportModal({ state, dispatch }) {
   return (
     <ModalShell tone="good">
       <div className="text-[10px] font-bold tracking-widest text-green-400 mb-1">FINAL MINISTERIAL REPORT CARD — TWELVE YEARS IN THE CHAIR</div>
+      {state.playerName && <div className="text-[12px] text-cyan-400 font-bold mb-0.5">{state.playerName}</div>}
       <h2 className="text-2xl font-bold text-slate-100 mb-1">“{rep.title}”</h2>
       <p className="text-[13px] text-slate-300 italic mb-3">{rep.line}</p>
       <div className="bg-slate-800/70 border border-slate-700 rounded-lg p-3 mb-3">
@@ -1868,12 +1946,17 @@ function ReportModal({ state, dispatch }) {
           <Row k="Pylon routes forced" v={state.stats.pylons} />
           <Row k="Routes undergrounded" v={state.stats.underground} />
           <Row k="Brownout events" v={state.stats.brownouts} tone={state.stats.brownouts > 0 ? "bad" : null} />
+          <Row k="Emergency import years" v={state.stats.emergencyImports || 0} tone={state.stats.emergencyImports > 0 ? "bad" : null} />
         </div>
       </div>
       <button onClick={() => dispatch({ type: "restart" })}
         className="w-full py-3 rounded-lg bg-green-600 hover:bg-green-500 text-slate-900 font-bold transition">
         ACCEPT PEERAGE & START A NEW TERM
       </button>
+      <a href="https://paypal.me/kyrenr" target="_blank" rel="noopener noreferrer"
+        className="block text-center mt-3 text-[11px] text-amber-400/80 hover:text-amber-300 transition">
+        ☕ Buy the developer a coffee
+      </a>
     </ModalShell>
   );
 }
@@ -1886,6 +1969,15 @@ function IntroModal({ state, dispatch }) {
       <ModalShell tone="good">
         <div className="text-[10px] font-bold tracking-widest text-green-400 mb-1">CLASSIFIED — CHAIR'S EYES ONLY</div>
         <h2 className="text-xl font-bold text-slate-100 mb-1">GridLock: The Great British Upgrade</h2>
+        <div className="mb-3">
+          <label className="text-[11px] text-slate-400 block mb-1">Your name, Chair (for the record books):</label>
+          <input
+            type="text" value={state.playerName} maxLength={24}
+            onChange={e => dispatch({ type: "setName", name: e.target.value })}
+            placeholder="e.g. Rt Hon. A. Chair"
+            className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-slate-100 text-sm focus:border-cyan-400 focus:outline-none"
+          />
+        </div>
         <p className="text-[12px] text-slate-400 mb-3">Choose your starting scenario. Each one changes your inherited position.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
           {SCENARIOS.map(sc => (
@@ -1903,6 +1995,10 @@ function IntroModal({ state, dispatch }) {
           className="w-full py-3 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-900 font-bold transition">
           Continue with "{chosen.label}" →
         </button>
+        <a href="https://paypal.me/kyrenr" target="_blank" rel="noopener noreferrer"
+          className="block text-center mt-3 text-[11px] text-amber-400/80 hover:text-amber-300 transition">
+          ☕ Enjoying GridLock? Buy the developer a coffee
+        </a>
       </ModalShell>
     );
   }
@@ -1912,16 +2008,18 @@ function IntroModal({ state, dispatch }) {
       <h2 className="text-xl sm:text-2xl font-bold text-slate-100 mb-0.5">GridLock: The Great British Upgrade</h2>
       <div className="text-[10px] text-cyan-400 font-bold mb-2">{chosen.icon} Scenario: {chosen.label} — <span className="italic font-normal text-slate-400">{chosen.tagline}</span></div>
       <div className="text-[12px] sm:text-[13px] text-slate-300 space-y-2 leading-relaxed mb-4">
-        <p>Welcome to NESO, Chair. The problem in one sentence: <span className="text-green-400">the wind is in Scotland, the demand is in London, and the wires in between are forty years old.</span></p>
+        <p>Welcome to NESO{state.playerName ? `, ${state.playerName}` : ", Chair"}. The problem in one sentence: <span className="text-green-400">the wind is in Scotland, the demand is in London, and the wires in between are forty years old.</span></p>
         <p>You have <b className="text-green-400">12 financial years</b> to reach 100% Net Zero while demand nearly doubles. New policies unlock at Year 7.</p>
         <ul className="text-[12px] text-slate-400 list-disc pl-5 space-y-1">
           <li><b className="text-cyan-300">DRAG &amp; DROP</b> assets from the Build Palette onto regions — or cables onto the lines between them.</li>
           <li><b className="text-cyan-300">✏️ DRAW</b> brand-new transmission corridors: drop the pencil on a region, then tap the destination.</li>
+          <li><b className="text-teal-300">🌙 Tidal Lagoons</b> give firm clean power on the coasts — and South Wales has the world-class Severn estuary.</li>
           <li><b className="text-slate-300">Watch the lines</b>: pulsing red = curtailment fines. Watch the ▲▼ trend next to Net Zero.</li>
           <li><b className="text-slate-300">Listen to Sir Reginald</b> — the advisor bar tells you what's about to go wrong.</li>
           <li><b className="text-cyan-300">🧪 The Skunkworks</b> holds the mad stuff: fusion bets, stratospheric kites, nuclear barges, hamsters.</li>
-          <li><b className="text-amber-300">📱 On a phone:</b> use the bottom tabs (Map · Build · Wire · Advance); pinch to zoom the map.</li>
-          <li>Lose if the Treasury hits zero, Rebellion hits 100%, or the lights go out.</li>
+          <li><b className="text-amber-300">📱 On a phone:</b> use the bottom tabs (Map · Build · National · Advance); pinch to zoom the map. Tap a region to build — the build panel scrolls.</li>
+          <li><b className="text-red-300">Run short on power</b> and you'll be forced into emergency foreign imports (£120m/GW + political damage) — survivable, but a string of them bankrupts you. A 💷 National Grid Bond can fund a rescue build-out.</li>
+          <li>Lose if the Treasury hits zero or Rebellion hits 100%.</li>
         </ul>
       </div>
       <div className="flex gap-2">
@@ -2035,8 +2133,9 @@ function App() {
     if (!p) return null;
     if (item.cat === "asset" || item.cat === "draw") {
       let best = null, bd = 2600;
-      for (const id of ["A", "B", "C", "D"]) {
+      for (const id of ["A", "B", "C", "D", "E"]) {
         if (item.id === "offshore" && !NODE_DEFS[id].offshoreOk) continue;
+        if (item.id === "tidal" && !NODE_DEFS[id].tidalOk) continue;
         const d = NODE_DEFS[id];
         const dist = (p.x - d.x) * (p.x - d.x) + (p.y - d.y) * (p.y - d.y);
         if (dist < bd) { bd = dist; best = { type: "node", id }; }
@@ -2170,6 +2269,7 @@ function App() {
         const cost = Math.round(t.cost * (t.id === "battery" ? S.batteryDiscount : 1) * (S.costMult || 1));
         if (S.treasury < cost) { play("error"); addToast(`💸 Can't afford ${t.name}`, "bad"); break; }
         if (t.id === "offshore" && !def.offshoreOk) { play("error"); addToast("🌊 Offshore wind needs a coastline", "bad"); break; }
+        if (t.id === "tidal" && !def.tidalOk) { play("error"); addToast("🌙 Tidal lagoons need an estuary or strong tidal coast", "bad"); break; }
         const yieldMult = t.kind === "battery" ? 1 : def.yields[t.kind];
         const effGW = r1(t.gw * yieldMult);
         const delay = S.policies.queueReform ? ECON.queueDelayReformed : ECON.queueDelayDefault;
@@ -2284,7 +2384,7 @@ function App() {
           case "porkBarrel":
             next.rebellion = clamp(S.rebellion - 12, 0, 100);
             next.approval = clamp(S.approval + 4, 0, 100);
-            next.nimby = { A: clamp(S.nimby.A - 10, 0, 100), B: clamp(S.nimby.B - 10, 0, 100), C: clamp(S.nimby.C - 10, 0, 100), D: clamp(S.nimby.D - 10, 0, 100) };
+            next.nimby = { A: clamp(S.nimby.A - 10, 0, 100), B: clamp(S.nimby.B - 10, 0, 100), C: clamp(S.nimby.C - 10, 0, 100), D: clamp(S.nimby.D - 10, 0, 100), E: clamp(S.nimby.E - 10, 0, 100) };
             logText = "PORK BARREL: £350m of suspiciously well-targeted infrastructure. Rebellion −12%, NIMBY −10 everywhere. Nobody asks questions.";
             break;
           case "reshuffle":
@@ -2319,6 +2419,26 @@ function App() {
         });
         break;
       }
+      case "borrow": {
+        if (S.loanUsed || S.loan) { play("error"); break; }
+        const yearsLeft = Math.max(1, ECON.totalYears - S.year + 1);
+        const PRINCIPAL = 1800, INTEREST = 1.25;
+        const perYear = Math.ceil((PRINCIPAL * INTEREST) / yearsLeft);
+        play("build");
+        addToast(`💷 National Grid Bond: +${fmtM(PRINCIPAL)} now`, "good");
+        setState({
+          ...S,
+          treasury: S.treasury + PRINCIPAL,
+          loanUsed: true,
+          loan: { perYear, yearsLeft },
+          log: [...S.log, { year: S.year, tone: "warn", text: `NATIONAL GRID BOND: ${fmtM(PRINCIPAL)} raised on the markets. Repayments of ${fmtM(perYear)}/yr for ${yearsLeft} years (${fmtM(Math.round(PRINCIPAL * INTEREST))} total). The Chancellor signs with a heavy hand.` }],
+        });
+        break;
+      }
+      case "setName":
+        if (typeof window !== "undefined") window.__gridlockName = action.name;
+        setState({ ...S, playerName: action.name });
+        break;
       case "advance": {
         if (S.phase !== "play") break;
         play("crisis");
@@ -2398,7 +2518,7 @@ function App() {
                 </div>
                 {selected && <button onClick={() => dispatch({ type: "select", sel: null })} className="text-[10px] text-sky-400 hover:text-sky-300">← back</button>}
               </div>
-              <div className="flex-1 min-h-0 overflow-y-auto p-3">
+              <div className="scroll-y flex-1 min-h-0 p-3 pb-24">
                 {selected && selected.type === "node" && <NodeTab state={state} flows={flows} nodeId={selected.id} dispatch={dispatch} />}
                 {selected && selected.type === "link" && <LinkTab state={state} flows={flows} linkId={selected.id} dispatch={dispatch} />}
                 {!selected && (
@@ -2418,8 +2538,8 @@ function App() {
         {/* NATIONAL pane (mobile only) — national dashboard + advisor, replaces wire/news reel */}
         <div className={`${mobilePane === "national" ? "flex flex-1 min-h-0" : "hidden"} lg:hidden flex-col gap-2`}>
           <AdvisorBar state={state} flows={flows} />
-          <div className="flex-1 min-h-0 bg-[#1e293b] rounded-xl border border-slate-700 overflow-y-auto">
-            <div className="p-3">
+          <div className="scroll-y flex-1 min-h-0 bg-[#1e293b] rounded-xl border border-slate-700">
+            <div className="p-3 pb-24">
               <DefaultTab state={state} flows={flows} dispatch={dispatch} />
             </div>
           </div>
