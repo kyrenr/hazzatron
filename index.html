@@ -227,7 +227,7 @@ const KIND_COLOR = { wind: "#4ade80", solar: "#facc15", nuclear: "#c084fc", batt
 /* economy constants — exposed in the Mechanics drawer */
 const ECON = {
   startTreasury: 3000, startPC: 60, startRebellion: 15,
-  baseIncome: 650, gasFleetStart: 34, gasFuelCostPerGW: 9, curtailFinePerGW: 40,
+  baseIncome: 585, gasFleetStart: 34, gasFuelCostPerGW: 9, curtailFinePerGW: 40,
   priceBase: 3.5, pricePerGasGW: 0.19, pricePerCurtailGW: 0.12, levyPriceAdd: 1.2,
   batteryFirmFactor: 0.5, queueDelayDefault: 4, queueDelayReformed: 1,
   brownoutTolerance: 4, demandStart: 35, demandEnd: 65, totalYears: 12,
@@ -902,14 +902,14 @@ function resolveYear(prev, mods) {
      stay on, but a string of these will bankrupt the Treasury (the real fail state). */
   const brownoutTol = Math.max(ECON.brownoutTolerance, f.demand * 0.12);
   if (unserved > brownoutTol) {
-    const emCost = Math.round(unserved * 120);                 // £120m per unserved GW — extortionate
-    const pcHit = Math.min(Math.round(s.pc), Math.round(unserved * 4));
+    const emCost = Math.round(unserved * 210);                 // £210m per unserved GW — ruinous spot prices
+    const pcHit = Math.min(Math.round(s.pc), Math.round(unserved * 5));
     s.treasury -= emCost;
     s.pc = clamp(s.pc - pcHit, 0, 100);
-    s.approval = clamp(s.approval - 12, 0, 100);
-    s.rebellion = clamp(s.rebellion + 14, 0, 100);
+    s.approval = clamp(s.approval - 14, 0, 100);
+    s.rebellion = clamp(s.rebellion + 16, 0, 100);
     s.stats.brownouts++; s.stats.emergencyImports++;
-    L("bad", `⚡ GRID EMERGENCY: ${fmtGW(unserved)} of demand unserved. Emergency interconnector imports and diesel deals struck with France, Norway and Ireland at panic prices — ${fmtM(emCost)}, −${pcHit} PC, −12 Approval, +14% Rebellion. The lights stayed on. Barely. The front pages did not forgive you.`);
+    L("bad", `⚡ GRID EMERGENCY: ${fmtGW(unserved)} of demand unserved. Emergency interconnector imports and diesel deals struck with France, Norway and Ireland at panic prices — ${fmtM(emCost)}, −${pcHit} PC, −14 Approval, +16% Rebellion. The lights stayed on. Barely. The front pages did not forgive you.`);
   } else if (unserved > 0) {
     s.treasury -= 200; s.rebellion = clamp(s.rebellion + 6, 0, 100); s.approval = clamp(s.approval - 7, 0, 100); s.stats.brownouts++;
     L("bad", `ROLLING BROWNOUTS: ${fmtGW(unserved)} short (emergency imports kick in above ${fmtGW(brownoutTol)}). Emergency demand control invoked. −£200m, Rebellion +6%, Approval −7.`);
@@ -978,7 +978,7 @@ function advise(state, flows) {
   const firm = firmCoverGW(state);
   const marginNext = firm + flows.cleanDelivered - nextDemand;
   if (state.netZero >= 100) return { tone: "good", text: "One hundred percent. I have nothing to add, Chair, except that I never doubted you. Officially." };
-  if (marginNext < 3.5) return { tone: "bad", text: `⚠ Next year's supply margin is only ~${r1(marginNext)} GW. If a wind lull hits, we'll be forced into emergency foreign power deals at ~£120m per GW short — plus a brutal hit to your Political Capital and Approval. Firm up NOW: drag a 🌙 Tidal Lagoon, ⚛️ SMR or 🔋 Battery onto the map, or buy the 🛢️ Strategic Gas Reserve.` };
+  if (marginNext < 3.5) return { tone: "bad", text: `⚠ Next year's supply margin is only ~${r1(marginNext)} GW. If a wind lull hits, we'll be forced into emergency foreign power deals at ~£175m per GW short — plus a brutal hit to your Political Capital and Approval. Firm up NOW: drag a 🌙 Tidal Lagoon, ⚛️ SMR or 🔋 Battery onto the map, or buy the 🛢️ Strategic Gas Reserve.` };
   const sat = Object.keys(state.links).filter(id => state.links[id].cap > 0 && (flows.byLink[id] || 0) / state.links[id].cap >= 0.99);
   if (sat.length) {
     const d = LINK_DEFS[sat[0]];
@@ -1508,7 +1508,7 @@ function DefaultTab({ state, flows, dispatch }) {
           <Bar value={Math.max(margin, 0)} max={20} color={margin < 3 ? "bg-red-500" : margin < 8 ? "bg-amber-400" : "bg-green-500"} />
           {margin < 5 && (
             <div className="text-[10px] text-red-300 bg-red-950/40 border border-red-800 rounded px-2 py-1 mt-1.5">
-              🕯 <b>BLACKOUT RISK.</b> If a wind lull or cold snap pushes the shortfall past ~{fmtGW(Math.max(ECON.brownoutTolerance, flows.demand * 0.12))}, you'll be forced into emergency foreign power deals at <b>£120m per GW</b> short — and lose Political Capital and Approval. Add firm capacity or imports before next year.
+              🕯 <b>BLACKOUT RISK.</b> If a wind lull or cold snap pushes the shortfall past ~{fmtGW(Math.max(ECON.brownoutTolerance, flows.demand * 0.12))}, you'll be forced into emergency foreign power deals at <b>£175m per GW</b> short — and lose Political Capital and Approval. Add firm capacity or imports before next year.
             </div>
           )}
         </div>
@@ -1591,9 +1591,9 @@ function DefaultTab({ state, flows, dispatch }) {
             <div>tidal: firm clean power at ~92% capacity factor (Severn-class)</div>
             <div>intermittency = (wind+solar − {state.firmMult}·(nuclear+tidal+battery+imports)) / demand</div>
             <div>net zero = 1 − gasFired/demand</div>
-            <div>shortfall &gt; max(4, 12%·demand) ⇒ EMERGENCY IMPORTS: −£120m/GW, −4 PC/GW, −12 Approval, +14% Rebellion (no longer instant game-over)</div>
+            <div>shortfall &gt; max(4, 12%·demand) ⇒ EMERGENCY IMPORTS: −£175m/GW, −5 PC/GW, −14 Approval, +16% Rebellion (no longer instant game-over)</div>
             <div>smaller shortfall ⇒ brownout: −£200m, −7 Approval, +6% Rebellion</div>
-            <div>income £650m/yr +£30m/yr (+£300m levy) · gas fuel £9m per GW fired</div>
+            <div>income £585m/yr +£30m/yr (+£300m levy) · gas fuel £9m per GW fired</div>
             <div>pylon: +3 GW/1yr/£320m/+4% rebellion · HVDC: +5 GW/2yr/£700m/painless</div>
             <div>wind capacity factor drawn 75–105% yearly (5% in a Dunkelflaute; strato-kites immune)</div>
           </div>
@@ -2018,7 +2018,7 @@ function IntroModal({ state, dispatch }) {
           <li><b className="text-slate-300">Listen to Sir Reginald</b> — the advisor bar tells you what's about to go wrong.</li>
           <li><b className="text-cyan-300">🧪 The Skunkworks</b> holds the mad stuff: fusion bets, stratospheric kites, nuclear barges, hamsters.</li>
           <li><b className="text-amber-300">📱 On a phone:</b> use the bottom tabs (Map · Build · National · Advance); pinch to zoom the map. Tap a region to build — the build panel scrolls.</li>
-          <li><b className="text-red-300">Run short on power</b> and you'll be forced into emergency foreign imports (£120m/GW + political damage) — survivable, but a string of them bankrupts you. A 💷 National Grid Bond can fund a rescue build-out.</li>
+          <li><b className="text-red-300">Run short on power</b> and you'll be forced into emergency foreign imports (£175m/GW + political damage) — survivable, but a string of them bankrupts you. A 💷 National Grid Bond can fund a rescue build-out.</li>
           <li>Lose if the Treasury hits zero or Rebellion hits 100%.</li>
         </ul>
       </div>
