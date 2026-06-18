@@ -1,0 +1,12 @@
+{
+  "name": "gridlock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GridLock: The Great British Upgrade — a single-page energy-grid strategy game.",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@babel/standalone": "^7.24.0"
+  }
+}

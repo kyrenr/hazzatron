@@ -1,12 +1,12 @@
 /* ============================================================================
    GRIDLOCK — headless Monte-Carlo balance harness
-   Extracts the REAL game logic from index.html (no copy drift) and plays the
+   Extracts the REAL game logic from index.src.html (no copy drift) and plays the
    game many times with a "competent player" heuristic to measure win rate.
    Run: node sim.mjs [runs] [scenario]
    ============================================================================ */
 import { readFileSync } from "fs";
 
-const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+const html = readFileSync(new URL("./index.src.html", import.meta.url), "utf8");
 
 /* pull the babel script body, then slice the pure-logic prefix
    (from the utilities banner up to the UI COMPONENTS banner) */
