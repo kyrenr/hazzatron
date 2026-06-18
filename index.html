@@ -4,9 +4,25 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>GridLock: The Great British Upgrade</title>
+<script>
+  /* Surface a startup failure instead of a silent blank page (e.g. a blocked
+     CDN, a Babel compile error, or a sandboxed network). */
+  window.addEventListener("error", function (e) {
+    var r = document.getElementById("root");
+    if (r && !r.hasChildNodes()) {
+      r.innerHTML =
+        '<div style="font-family:ui-monospace,Menlo,monospace;color:#f87171;background:#0f172a;' +
+        'padding:24px;max-width:700px;margin:0 auto;font-size:13px;line-height:1.6">' +
+        "<b style='color:#fbbf24'>GridLock failed to start.</b><br><br>" +
+        ((e && (e.message || e.error)) || "Unknown error") +
+        "<br><br>This usually means the React / Babel / Tailwind CDN scripts could not " +
+        "load (a blocked or offline network). Check your connection and reload.</div>";
+    }
+  });
+</script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   html, body { background: #0f172a; overscroll-behavior: none; }
